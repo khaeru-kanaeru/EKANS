@@ -66,7 +66,7 @@
 
     <!-- Main App -->
     <div id="main-app" class="hidden h-full flex flex-col bg-[#f4f7fb] relative">
-        <header class="bg-white border-b shadow-sm z-20 pt-4 pb-2 px-6">
+        <header class="bg-white border-b shadow-sm z-20 pt-4 pb-2 px-6 shrink-0">
             <div class="flex justify-between items-end mb-4">
                 <h1 id="header-title" class="text-2xl font-display font-black text-brand-blue uppercase tracking-wide">STATION MARKER DASHBOARD</h1>
                 <div class="flex items-center gap-4">
@@ -93,18 +93,22 @@
             </div>
         </header>
 
-        <div class="px-6 py-3 bg-white border-b flex justify-between items-center shadow-sm z-10 flex-wrap gap-2">
+        <div class="px-6 py-3 bg-white border-b flex justify-between items-center shadow-sm z-10 flex-wrap gap-2 shrink-0">
             <div class="flex items-center gap-2"><i class="fas fa-list-ul text-blue-400"></i><span class="font-bold text-sm text-brand-blue">Active Queue</span><span id="queue-counter-badge" class="bg-blue-100 text-blue-600 text-xs font-bold px-2 py-0.5 rounded-full">0</span></div>
             <div class="flex items-center gap-2">
-                <div id="filter-line-container"><select id="filter-line" onchange="renderData()" class="border border-gray-200 rounded-full px-3 py-1.5 text-xs font-bold text-gray-600 bg-gray-50 cursor-pointer"><option value="ALL">Semua Line</option><option value="Line Crimping">Line Crimping</option><option value="Line SMV">Line SMV</option><option value="Line Proto">Line Proto</option><option value="Line HA">Line HA</option></select></div>
-                <div id="filter-shift-container"><select id="filter-shift" onchange="renderData()" class="border border-gray-200 rounded-full px-3 py-1.5 text-xs font-bold text-gray-600 bg-gray-50 cursor-pointer"><option value="ALL">Semua Shift</option><option value="A">SHIFT A</option><option value="B">SHIFT B</option></select></div>
+                <div class="flex items-center">
+                    <select id="filter-line" onchange="renderData()" class="border border-gray-200 rounded-full px-3 py-1.5 text-xs font-bold text-gray-600 bg-gray-50 cursor-pointer focus:outline-none"><option value="ALL">Semua Line</option><option value="Line Crimping">Line Crimping</option><option value="Line SMV">Line SMV</option><option value="Line Proto">Line Proto</option><option value="Line HA">Line HA</option></select>
+                    <!-- Tombol Grid Toggle untuk Leader -->
+                    <button id="btn-toggle-view" onclick="toggleLeaderView()" class="hidden border border-gray-200 rounded-full px-3 py-1.5 text-xs font-bold text-gray-600 bg-white hover:bg-gray-100 transition shadow-sm ml-1" title="Ubah Tampilan"><i class="fas fa-th-large text-brand-teal"></i></button>
+                </div>
+                <div id="filter-shift-container"><select id="filter-shift" onchange="renderData()" class="border border-gray-200 rounded-full px-3 py-1.5 text-xs font-bold text-gray-600 bg-gray-50 cursor-pointer focus:outline-none"><option value="ALL">Semua Shift</option><option value="A">SHIFT A</option><option value="B">SHIFT B</option></select></div>
                 <div>
-                    <select id="sort-date" onchange="renderData()" class="border border-gray-200 rounded-full px-3 py-1.5 text-xs font-bold text-gray-600 bg-gray-50 cursor-pointer">
+                    <select id="sort-date" onchange="renderData()" class="border border-gray-200 rounded-full px-3 py-1.5 text-xs font-bold text-gray-600 bg-gray-50 cursor-pointer focus:outline-none">
                         <option value="asc">Terlama -> Terbaru</option>
                         <option value="desc">Terbaru -> Terlama</option>
                     </select>
                 </div>
-                <div class="relative ml-1"><i class="fas fa-search absolute left-3 top-2 text-gray-300 text-xs"></i><input type="text" id="search-input" onkeyup="renderData()" placeholder="CARI ANTRIAN..." class="pl-8 pr-4 py-1.5 border border-gray-200 rounded-full text-xs font-bold text-gray-700 w-52 bg-gray-50 uppercase"></div>
+                <div class="relative ml-1"><i class="fas fa-search absolute left-3 top-2 text-gray-300 text-xs"></i><input type="text" id="search-input" onkeyup="renderData()" placeholder="CARI ANTRIAN..." class="pl-8 pr-4 py-1.5 border border-gray-200 rounded-full text-xs font-bold text-gray-700 w-52 bg-gray-50 uppercase focus:outline-none"></div>
                 <div class="flex gap-2 ml-1">
                     <button id="btn-new-kanban" onclick="routeNewKanban()" class="hidden bg-brand-blue hover:bg-blue-800 text-white px-4 py-1.5 rounded-full text-xs font-bold shadow-md flex items-center gap-2"><i class="fas fa-plus"></i> NEW KANBAN</button>
                 </div>
@@ -131,31 +135,63 @@
             </div>
         </div>
 
-        <main id="dashboard-leader" class="hidden flex-1 overflow-auto p-4 z-0 bg-[#f4f7fb]">
-            <div id="leader-queue-container" class="flex flex-col gap-0"></div>
+        <main id="dashboard-leader" class="hidden flex-1 overflow-hidden p-3 z-0 bg-[#f4f7fb] w-full">
+            <!-- Tampilan List Tradisional Leader -->
+            <div id="leader-list-view" class="h-full overflow-y-auto pr-2 pb-10">
+                <div id="leader-queue-container" class="flex flex-col gap-0"></div>
+            </div>
+            
+            <!-- Tampilan Grid/Kanban Khusus Leader -->
+            <div id="leader-grid-view" class="hidden h-full flex flex-col md:flex-row gap-3 w-full">
+                <div class="flex-1 min-w-0 bg-white border border-gray-200 flex flex-col h-full shadow-sm rounded-lg overflow-hidden">
+                    <div class="p-2.5 bg-orange-100 border-b border-orange-200 flex justify-between items-center shadow-sm">
+                        <h3 class="font-bold text-xs text-orange-800 uppercase tracking-wide"><i class="fas fa-clock mr-1 text-orange-600"></i>Waiting</h3>
+                        <span id="l-grid-wait-count" class="bg-orange-500 text-white text-[10px] px-2 py-0.5 rounded-full font-black shadow-sm">0</span>
+                    </div>
+                    <div id="l-grid-wait-container" class="flex-1 overflow-y-auto p-2 space-y-0 bg-[#f4f7fb]"></div>
+                </div>
+                
+                <div class="flex-1 min-w-0 bg-white border border-gray-200 flex flex-col h-full shadow-sm rounded-lg overflow-hidden">
+                    <div class="p-2.5 bg-blue-100 border-b border-blue-200 flex justify-between items-center shadow-sm">
+                        <h3 class="font-bold text-xs text-blue-800 uppercase tracking-wide"><i class="fas fa-spinner fa-spin mr-1 text-blue-600"></i>Processing</h3>
+                        <span id="l-grid-proc-count" class="bg-blue-600 text-white text-[10px] px-2 py-0.5 rounded-full font-black shadow-sm">0</span>
+                    </div>
+                    <div id="l-grid-proc-container" class="flex-1 overflow-y-auto p-2 space-y-0 bg-[#f4f7fb] content-start"></div>
+                </div>
+                
+                <div class="flex-1 min-w-0 bg-white border border-gray-200 flex flex-col h-full shadow-sm rounded-lg overflow-hidden">
+                    <div class="p-2.5 bg-green-100 border-b border-green-200 flex justify-between items-center shadow-sm">
+                        <h3 class="font-bold text-xs text-green-800 uppercase tracking-wide"><i class="fas fa-check-circle mr-1 text-green-600"></i>Ready</h3>
+                        <span id="l-grid-ready-count" class="bg-green-600 text-white text-[10px] px-2 py-0.5 rounded-full font-black shadow-sm">0</span>
+                    </div>
+                    <div id="l-grid-ready-container" class="flex-1 overflow-y-auto p-2 space-y-0 bg-[#f4f7fb]"></div>
+                </div>
+            </div>
         </main>
 
-        <main id="dashboard-warehouse" class="hidden flex-1 overflow-hidden flex flex-col md:flex-row p-2 gap-2 z-0 w-full bg-[#f4f7fb]">
-            <div class="flex-1 min-w-0 bg-white border flex flex-col h-full shadow-sm rounded-lg overflow-hidden">
-                <div class="p-2 bg-red-50 border-b border-red-100 flex justify-between items-center relative">
-                    <div class="flex items-center"><h3 class="font-bold text-[10px] text-red-700 uppercase tracking-wide"><i class="fas fa-bell mr-1"></i>Incoming</h3><span id="badge-msg-incoming" class="hidden bg-red-500 text-white text-[8px] px-1.5 rounded-full font-black ml-2 animate-bounce shadow">0 <i class="fas fa-envelope ml-0.5 text-[6px]"></i></span></div>
-                    <span id="incoming-count" class="bg-red-500 text-white text-[9px] px-1.5 py-0.5 rounded-full font-bold">0</span>
+        <main id="dashboard-warehouse" class="hidden flex-1 overflow-hidden flex flex-col md:flex-row p-3 gap-3 z-0 w-full bg-[#f4f7fb]">
+            <div class="flex-1 min-w-0 bg-white border border-gray-200 flex flex-col h-full shadow-sm rounded-lg overflow-hidden">
+                <div class="p-2.5 bg-red-100 border-b border-red-200 flex justify-between items-center relative shadow-sm">
+                    <div class="flex items-center"><h3 class="font-bold text-xs text-red-800 uppercase tracking-wide"><i class="fas fa-bell mr-1 text-red-600"></i>Incoming</h3><span id="badge-msg-incoming" class="hidden bg-red-600 text-white text-[8px] px-1.5 rounded-full font-black ml-2 animate-bounce shadow">0 <i class="fas fa-envelope ml-0.5 text-[6px]"></i></span></div>
+                    <span id="incoming-count" class="bg-red-600 text-white text-[10px] px-2 py-0.5 rounded-full font-black shadow-sm">0</span>
                 </div>
-                <div id="supply-incoming-container" class="flex-1 overflow-y-auto p-1.5 space-y-0 bg-gray-50/50"></div>
+                <div id="supply-incoming-container" class="flex-1 overflow-y-auto p-2 space-y-0 bg-[#f4f7fb]"></div>
             </div>
-            <div class="flex-1 min-w-0 bg-white border flex flex-col h-full shadow-sm rounded-lg overflow-hidden">
-                <div class="p-2 bg-blue-50 border-b border-blue-100 flex justify-between items-center relative">
-                    <div class="flex items-center"><h3 class="font-bold text-[10px] text-blue-700 uppercase tracking-wide"><i class="fas fa-spinner fa-spin mr-1"></i>Processing</h3><span id="badge-msg-processing" class="hidden bg-red-500 text-white text-[8px] px-1.5 rounded-full font-black ml-2 animate-bounce shadow">0 <i class="fas fa-envelope ml-0.5 text-[6px]"></i></span></div>
-                    <span id="processing-count" class="bg-blue-500 text-white text-[9px] px-1.5 py-0.5 rounded-full font-bold">0</span>
+            
+            <div class="flex-1 min-w-0 bg-white border border-gray-200 flex flex-col h-full shadow-sm rounded-lg overflow-hidden">
+                <div class="p-2.5 bg-blue-100 border-b border-blue-200 flex justify-between items-center relative shadow-sm">
+                    <div class="flex items-center"><h3 class="font-bold text-xs text-blue-800 uppercase tracking-wide"><i class="fas fa-spinner fa-spin mr-1 text-blue-600"></i>Processing</h3><span id="badge-msg-processing" class="hidden bg-red-600 text-white text-[8px] px-1.5 rounded-full font-black ml-2 animate-bounce shadow">0 <i class="fas fa-envelope ml-0.5 text-[6px]"></i></span></div>
+                    <span id="processing-count" class="bg-blue-600 text-white text-[10px] px-2 py-0.5 rounded-full font-black shadow-sm">0</span>
                 </div>
-                <div id="supply-processing-container" class="flex-1 overflow-y-auto p-1.5 space-y-0 bg-gray-50/50 content-start"></div>
+                <div id="supply-processing-container" class="flex-1 overflow-y-auto p-2 space-y-0 bg-[#f4f7fb] content-start"></div>
             </div>
-            <div class="flex-1 min-w-0 bg-white border flex flex-col h-full shadow-sm rounded-lg overflow-hidden">
-                <div class="p-2 bg-brand-teal bg-opacity-10 border-b border-teal-100 flex justify-between items-center relative">
-                    <div class="flex items-center"><h3 class="font-bold text-[10px] text-brand-teal uppercase tracking-wide"><i class="fas fa-check-circle mr-1"></i>Ready/Diambil</h3><span id="badge-msg-ready" class="hidden bg-red-500 text-white text-[8px] px-1.5 rounded-full font-black ml-2 animate-bounce shadow">0 <i class="fas fa-envelope ml-0.5 text-[6px]"></i></span></div>
-                    <span id="ready-count" class="bg-teal-500 text-white text-[9px] px-1.5 py-0.5 rounded-full font-bold">0</span>
+            
+            <div class="flex-1 min-w-0 bg-white border border-gray-200 flex flex-col h-full shadow-sm rounded-lg overflow-hidden">
+                <div class="p-2.5 bg-green-100 border-b border-green-200 flex justify-between items-center relative shadow-sm">
+                    <div class="flex items-center"><h3 class="font-bold text-xs text-green-800 uppercase tracking-wide"><i class="fas fa-check-circle mr-1 text-green-600"></i>Ready/Diambil</h3><span id="badge-msg-ready" class="hidden bg-red-600 text-white text-[8px] px-1.5 rounded-full font-black ml-2 animate-bounce shadow">0 <i class="fas fa-envelope ml-0.5 text-[6px]"></i></span></div>
+                    <span id="ready-count" class="bg-green-600 text-white text-[10px] px-2 py-0.5 rounded-full font-black shadow-sm">0</span>
                 </div>
-                <div id="supply-ready-container" class="flex-1 overflow-y-auto p-1.5 space-y-0 bg-gray-50/50"></div>
+                <div id="supply-ready-container" class="flex-1 overflow-y-auto p-2 space-y-0 bg-[#f4f7fb]"></div>
             </div>
         </main>
     </div>
@@ -189,6 +225,7 @@
 
                     <h2 id="stat-title-display" class="font-display font-black text-2xl text-brand-blue mb-6 text-center uppercase tracking-wider">STATISTIK KANBAN (ALL)</h2>
                     
+                    <!-- Container 1: Overview Averages -->
                     <div id="stat-overview-container">
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-200 flex flex-col items-center justify-center text-center relative overflow-hidden group">
@@ -210,6 +247,7 @@
                         </div>
                     </div>
 
+                    <!-- Container 2: Assy Process Times -->
                     <div id="stat-assy-container" class="hidden">
                         <div class="bg-white p-5 rounded-2xl border border-gray-200 shadow-sm">
                             <div class="flex justify-between items-center border-b border-gray-100 pb-3 mb-4">
@@ -303,13 +341,15 @@
         let tempAssyListMarker = []; let currentKanbanTypeMarker = 'ALL'; let imppMarkersData = [];
         let timeInterval = null; let clockInterval = null; let isHistoryOpen = false; let cancelTargetId = null;
         let currentStatTab = 'ALL';
-        const STATUS_WAITING = 'WAITING'; const STATUS_PROCESSING = 'PROCESSING'; const STATUS_READY = 'READY'; const STATUS_FINISHED = 'FINISHED';
+        let isLeaderGridView = false;
+        const STATUS_WAITING = 'WAITING'; const STATUS_PROCESSING = 'PROCESSING'; const STATUS_READY = 'READY'; const STATUS_PICKED_UP = 'PICKED_UP'; const STATUS_FINISHED = 'FINISHED';
 
         let whPresenceInterval = null;
         let cachedHistoryBuckets = {}; 
         let loadedHistoryData = []; 
 
         let audioCtx = null;
+        
         function initAudio() {
             if (!audioCtx) {
                 audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -383,7 +423,12 @@
         function initApp() { 
             initRealtimeDB(); 
             const savedUser = sessionStorage.getItem('eks_unified_user'); 
-            if (savedUser) { currentUser = JSON.parse(savedUser); showApp(); } 
+            if (savedUser) { 
+                currentUser = JSON.parse(savedUser); 
+                const savedView = localStorage.getItem('eks_leader_view');
+                if(savedView === 'grid') isLeaderGridView = true;
+                showApp(); 
+            } 
         }
 
         // Warehouse Presence Logic
@@ -415,7 +460,7 @@
             const errEl = document.getElementById('license-error'); 
             if (!VALID_LICENSES[key]) { errEl.textContent = 'Lisensi tidak valid atau tidak terdaftar!'; errEl.classList.remove('invisible'); return; } 
             
-            initAudio(); // Aktifkan AudioContext secara legal pada interaksi pengguna
+            initAudio(); 
             requestNotificationPermission(); 
             
             currentUser = { ...VALID_LICENSES[key] }; 
@@ -438,6 +483,13 @@
             document.getElementById('main-app').classList.add('hidden'); 
         }
 
+        function toggleLeaderView() {
+            isLeaderGridView = !isLeaderGridView;
+            localStorage.setItem('eks_leader_view', isLeaderGridView ? 'grid' : 'list');
+            document.getElementById('btn-toggle-view').innerHTML = isLeaderGridView ? '<i class="fas fa-list text-brand-teal"></i>' : '<i class="fas fa-th-large text-brand-teal"></i>';
+            renderData();
+        }
+
         function showApp() { 
             document.getElementById('login-page').classList.add('hidden'); document.getElementById('main-app').classList.remove('hidden'); 
             document.getElementById('lbl-role').textContent = currentUser.role === 'leader' ? 'LINE' : 'WAREHOUSE'; 
@@ -449,6 +501,10 @@
                 document.getElementById('dashboard-leader').classList.remove('hidden'); document.getElementById('dashboard-warehouse').classList.add('hidden'); document.getElementById('btn-new-kanban').classList.remove('hidden'); 
                 document.getElementById('btn-stats').classList.add('hidden');
                 document.getElementById('filter-line').value = currentUser.line; 
+
+                // Tampilkan icon grid toggle sesuai state
+                document.getElementById('btn-toggle-view').classList.remove('hidden');
+                document.getElementById('btn-toggle-view').innerHTML = isLeaderGridView ? '<i class="fas fa-list text-brand-teal"></i>' : '<i class="fas fa-th-large text-brand-teal"></i>';
                 
                 document.getElementById('wh-presence-container').classList.remove('hidden');
                 firebase.database().ref('wh_presence_marker').on('value', snap => {
@@ -461,6 +517,7 @@
             } else { 
                 document.getElementById('dashboard-leader').classList.add('hidden'); document.getElementById('dashboard-warehouse').classList.remove('hidden'); document.getElementById('btn-new-kanban').classList.add('hidden'); 
                 document.getElementById('btn-stats').classList.remove('hidden');
+                document.getElementById('btn-toggle-view').classList.add('hidden'); 
                 document.getElementById('wh-presence-container').classList.add('hidden'); 
                 
                 whPresenceInterval = setInterval(updateWarehousePresence, 5000);
@@ -718,33 +775,51 @@
             return groups;
         }
 
+        function getLineColor(line) {
+            if(line === 'Line Proto') return 'bg-blue-100 text-blue-800 border-blue-300';
+            if(line === 'Line Crimping') return 'bg-orange-100 text-orange-800 border-orange-300';
+            if(line === 'Line HA') return 'bg-red-100 text-red-800 border-red-300';
+            if(line === 'Line SMV') return 'bg-yellow-100 text-yellow-800 border-yellow-300';
+            return 'bg-gray-100 text-gray-800 border-gray-300';
+        }
+
+        // POKA-YOKE Visual: Pewarnaan latar otomatis berbasis status
+        function getStatusBgClass(req) {
+            if (req.urgent) return 'bg-red-50/90 border-red-400 border-2';
+            if (req.status === STATUS_WAITING) return 'bg-orange-500/10 border-orange-200';
+            if (req.status === STATUS_PROCESSING) return 'bg-blue-500/10 border-blue-200';
+            if (req.status === STATUS_READY || req.status === STATUS_PICKED_UP) return 'bg-green-500/10 border-green-200';
+            return 'bg-white border-gray-200';
+        }
+
         function generateCardHTML_Leader(req) {
-            const isUrgent = req.urgent; const borderCls = isUrgent ? 'border-red-400 border-2' : 'border-gray-200';
+            const isUrgent = req.urgent; 
+            const bgClass = getStatusBgClass(req);
             const now = Date.now(); const lastPing = req.lastPingTime || 0; const isCooldown = (now-lastPing)<10000; const secLeft = isCooldown ? Math.ceil((10000-(now-lastPing))/1000) : 0;
             const item = req.items[0];
             
-            const tWait = `<div class="w-[120px] flex flex-col items-center justify-center py-2 px-1 rounded-md transition-all ${req.status==='WAITING'?'bg-orange-50 border border-orange-200 text-orange-600 shadow-sm z-10 scale-105':'text-gray-400 bg-gray-50/50'}"><span class="timer-segment font-black text-[11px] whitespace-nowrap leading-tight px-1" data-start="${req.timestamp}" data-end="${req.timeAccepted || ''}" data-days="false">00:00:00</span><span class="text-[9px] uppercase tracking-wider font-bold mt-1">Wait</span></div>`;
-            const tProc = `<div class="w-[120px] flex flex-col items-center justify-center py-2 px-1 rounded-md transition-all ${req.status==='PROCESSING'?'bg-blue-50 border border-blue-200 text-blue-600 shadow-sm z-10 scale-105':'text-gray-400 bg-gray-50/50'}"><span class="timer-segment font-black text-[11px] whitespace-nowrap leading-tight px-1" data-start="${req.timeAccepted || ''}" data-end="${req.timeReady || ''}" data-days="true">00:00:00:00</span><span class="text-[9px] uppercase tracking-wider font-bold mt-1">Process</span></div>`;
-            const tRdy  = `<div class="w-[120px] flex flex-col items-center justify-center py-2 px-1 rounded-md transition-all ${req.status==='READY'?'bg-green-50 border border-green-200 text-green-600 shadow-sm z-10 scale-105':'text-gray-400 bg-gray-50/50'}"><span class="timer-segment font-black text-[11px] whitespace-nowrap leading-tight px-1" data-start="${req.timeReady || ''}" data-end="${req.timeFinished || ''}" data-days="false">00:00:00</span><span class="text-[9px] uppercase tracking-wider font-bold mt-1">Ready</span></div>`;
+            const tWait = `<div class="w-[120px] flex flex-col items-center justify-center py-2 px-1 rounded-md transition-all ${req.status==='WAITING'?'bg-orange-50 border border-orange-200 text-orange-600 shadow-sm z-10 scale-105':'text-gray-400 bg-white/60 border border-transparent'}"><span class="timer-segment font-black text-[11px] whitespace-nowrap leading-tight px-1" data-start="${req.timestamp}" data-end="${req.timeAccepted || ''}" data-days="false">00:00:00</span><span class="text-[9px] uppercase tracking-wider font-bold mt-1">Wait</span></div>`;
+            const tProc = `<div class="w-[120px] flex flex-col items-center justify-center py-2 px-1 rounded-md transition-all ${req.status==='PROCESSING'?'bg-blue-50 border border-blue-200 text-blue-600 shadow-sm z-10 scale-105':'text-gray-400 bg-white/60 border border-transparent'}"><span class="timer-segment font-black text-[11px] whitespace-nowrap leading-tight px-1" data-start="${req.timeAccepted || ''}" data-end="${req.timeReady || ''}" data-days="true">00:00:00</span><span class="text-[9px] uppercase tracking-wider font-bold mt-1">Process</span></div>`;
+            const tRdy  = `<div class="w-[120px] flex flex-col items-center justify-center py-2 px-1 rounded-md transition-all ${req.status==='READY'?'bg-green-50 border border-green-200 text-green-600 shadow-sm z-10 scale-105':'text-gray-400 bg-white/60 border border-transparent'}"><span class="timer-segment font-black text-[11px] whitespace-nowrap leading-tight px-1" data-start="${req.timeReady || ''}" data-end="${req.timeFinished || ''}" data-days="false">00:00:00</span><span class="text-[9px] uppercase tracking-wider font-bold mt-1">Ready</span></div>`;
             
             let actionHTML = '';
             if(req.status==='WAITING') actionHTML = `<button onclick="event.stopPropagation(); resendNotif('${req.id}')" class="ping-btn w-full h-full flex flex-col items-center justify-center text-brand-blue bg-blue-100 hover:bg-blue-200 rounded-lg shadow-sm border border-blue-200 disabled:opacity-50" data-ping-time="${lastPing}" ${isCooldown?'disabled':''}>${isCooldown?`<span class="text-sm font-display font-black">${secLeft}s</span>`:`<i class="fas fa-bell text-xl animate-pulse"></i>`}</button>`;
-            else if(req.status==='READY') actionHTML = `<div class="w-full h-full flex flex-col items-center justify-center bg-green-50 border border-green-100 rounded-lg text-green-600 text-[9px] font-bold text-center px-1">Siap<br>Diambil</div>`;
+            else if(req.status==='READY' || req.status==='PICKED_UP') actionHTML = `<button onclick="event.stopPropagation(); openFinishModal('${req.id}')" class="w-full h-full flex flex-col items-center justify-center bg-brand-teal hover:bg-teal-700 text-white text-[10px] font-bold rounded-lg uppercase shadow-md p-1"><i class="fas fa-check-double text-lg mb-1"></i>Selesai</button>`;
             else actionHTML = `<div class="w-full h-full flex flex-col items-center justify-center bg-gray-50 border border-gray-100 rounded-lg text-gray-300"><i class="fas fa-spinner fa-spin text-xl"></i></div>`;
 
             const unread = (req.messages||[]).filter(m=>m.senderRole!==currentUser.role&&!m.isRead).length;
             const badgeHtml = unread>0 ? `<div class="absolute -top-2 -right-2 bg-red-500 text-white text-[9px] font-black w-5 h-5 flex items-center justify-center rounded-full animate-bounce shadow-md border z-20">${unread}</div>`:'';
 
             return `
-            <div onclick="showDetailModal('${req.id}')" oncontextmenu="handleRightClick(event, '${req.id}')" class="cursor-pointer bg-white rounded-lg shadow-sm border ${borderCls} p-2.5 flex flex-row items-stretch gap-3 hover:shadow-md hover:border-blue-300 relative min-h-[75px]">
+            <div onclick="showDetailModal('${req.id}')" oncontextmenu="handleRightClick(event, '${req.id}')" class="cursor-pointer rounded-lg shadow-sm border ${bgClass} p-2.5 flex flex-row items-stretch gap-3 hover:shadow-md hover:border-blue-300 relative min-h-[75px]">
                 ${isUrgent?'<div class="absolute top-0 left-0 bg-red-500 text-white text-[8px] font-bold px-2 py-0.5 rounded-br-lg rounded-tl-lg blink-urgent uppercase z-10">URGENT</div>':''}
                 ${badgeHtml}
                 <div class="flex-1 flex items-center pr-2 ${isUrgent?'pt-3':''}">
-                    <div class="text-center mr-3 w-20 shrink-0">
-                        <div class="text-[7px] font-bold text-gray-400 uppercase mb-0.5">ID KANBAN</div>
-                        <div class="font-display font-black text-sm leading-none text-brand-blue">${req.displayId || req.queueNum}</div>
+                    <div class="text-center mr-3 w-24 shrink-0 flex flex-col items-center justify-center p-1.5 rounded border shadow-sm ${getLineColor(item.line)}">
+                        <div class="text-[7px] font-bold uppercase mb-0.5 opacity-80">ID KANBAN</div>
+                        <div class="font-display font-black text-[11px] leading-none break-all">${req.displayId || req.queueNum}</div>
                     </div>
-                    <div class="flex-1 pl-3 border-l-2 border-gray-100 overflow-hidden">
+                    <div class="flex-1 pl-3 border-l-2 border-white/60 overflow-hidden">
                         <div class="flex flex-wrap items-center gap-2 mb-1.5">
                             <span class="font-display font-black text-lg text-gray-800 uppercase leading-none">${item.assy} ${req.items.length>1?`<span class="text-[10px] text-gray-400 font-normal italic">(+${req.items.length-1})</span>`:''}</span>
                             <span class="bg-gray-800 text-white px-2 py-0.5 rounded text-[10px] font-black uppercase shadow-sm">WP: ${item.wp||'-'}</span>
@@ -759,36 +834,39 @@
                         </div>
                     </div>
                 </div>
-                <div class="shrink-0 border-l-2 border-gray-100 pl-3 pr-1 flex items-center justify-center">
+                <div class="shrink-0 border-l-2 border-white/60 pl-3 pr-1 flex items-center justify-center">
                     <div class="flex gap-3 w-[380px] shrink-0 justify-end">${tWait}${tProc}${tRdy}</div>
                 </div>
                 <div class="w-16 shrink-0 pl-1 flex justify-center py-0.5">${actionHTML}</div>
             </div>`;
         }
 
-        function generateCardHTML_Warehouse(req, actionBtnHTML, progressHTML, timerHTML) {
+        function generateCardHTML_Compact(req, actionBtnHTML, progressHTML, timerHTML) {
             const isUrgent = req.urgent;
+            const bgClass = getStatusBgClass(req);
             const unreadCount = (req.messages||[]).filter(m=>m.senderRole!==currentUser.role&&!m.isRead).length;
             return `
-            <div onclick="showDetailModal('${req.id}')" oncontextmenu="handleRightClick(event, '${req.id}')" class="cursor-pointer flex items-stretch gap-1 p-1.5 ${req.urgent?'bg-red-50 border-red-300 border-2':'bg-white border-gray-200 border'} rounded-lg shadow-sm hover:shadow relative min-h-[60px]">
+            <div onclick="showDetailModal('${req.id}')" oncontextmenu="handleRightClick(event, '${req.id}')" class="cursor-pointer flex items-stretch gap-1 p-1.5 ${bgClass} rounded-lg shadow-sm hover:shadow relative min-h-[60px]">
                 ${req.urgent?'<div class="absolute left-0 top-0 bottom-0 w-1 bg-red-500 rounded-l-lg blink-urgent z-10"></div>':''}
                 ${unreadCount>0?`<div class="absolute -top-2 -right-2 bg-red-500 text-white text-[9px] font-black w-5 h-5 flex items-center justify-center rounded-full z-20">${unreadCount}</div>`:''}
-                <div class="w-12 text-center border-r pr-1 shrink-0 flex flex-col items-center justify-center ${req.urgent?'pl-2':''}">
-                    <span class="text-[5px] font-bold text-gray-400 uppercase mb-0.5">ID</span>
-                    <span class="font-display font-black text-[10px] text-brand-blue leading-none break-all">${req.displayId || req.queueNum}</span>
+                <div class="w-16 text-center border-r border-white/60 pr-1 shrink-0 flex flex-col items-center justify-center ${req.urgent?'pl-2':''}">
+                    <div class="p-1 rounded border shadow-sm w-full ${getLineColor(req.items[0].line)} flex flex-col items-center justify-center">
+                        <span class="text-[5px] font-bold uppercase mb-0.5 opacity-80">ID</span>
+                        <span class="font-display font-black text-[9px] leading-none break-all">${req.displayId || req.queueNum}</span>
+                    </div>
                 </div>
                 <div class="flex-1 flex flex-col justify-center min-w-[40px] overflow-hidden px-1">
                     <div class="text-[10px] font-black text-gray-800 truncate">${req.items[0].assy} ${req.items.length>1?`<span class="text-[8px] text-gray-400 italic">(+${req.items.length-1})</span>`:''}</div>
                     <div class="flex flex-wrap items-center gap-1 mt-1">
                         <span class="text-[6px] font-bold px-1 rounded uppercase border ${req.type==='ALL'?'bg-blue-100 text-blue-700':'bg-purple-100 text-purple-700'}">${req.type}</span>
                         <span class="text-[6px] font-bold bg-orange-100 text-orange-700 px-1 rounded uppercase border">SH-${req.shift||'-'}</span>
-                        <span class="text-[7px] text-brand-teal bg-teal-50 border px-1 rounded uppercase font-bold truncate max-w-[50px]">${req.items[0].pic || req.requestedBy}</span>
-                        <span class="text-[7px] font-black border px-1 rounded bg-blue-50 text-blue-600">QTY: ${req.items.reduce((sum, i) => sum + Number(i.qty), 0)}</span>
+                        <span class="text-[7px] text-brand-teal bg-teal-50 border border-teal-200 px-1 rounded uppercase font-bold truncate max-w-[50px]">${req.items[0].pic || req.requestedBy}</span>
+                        <span class="text-[7px] font-black border border-blue-200 px-1 rounded bg-blue-50 text-blue-600">QTY: ${req.items.reduce((sum, i) => sum + Number(i.qty), 0)}</span>
                         ${req.items[0].lot ? `<span class="text-[7px] font-black border border-purple-200 bg-purple-50 text-purple-700 px-1 rounded uppercase">L: ${req.items[0].lot}</span>` : ''}
                     </div>
                 </div>
-                <div class="shrink-0 border-l pl-1.5 pr-1 flex items-center justify-center">${timerHTML}</div>
-                <div class="w-[50px] flex flex-col justify-center shrink-0 border-l pl-1.5 px-0.5">${progressHTML}${actionBtnHTML}</div>
+                <div class="shrink-0 border-l border-white/60 pl-1.5 pr-1 flex items-center justify-center">${timerHTML}</div>
+                <div class="w-[50px] flex flex-col justify-center shrink-0 border-l border-white/60 pl-1.5 px-0.5">${progressHTML}${actionBtnHTML}</div>
             </div>`;
         }
 
@@ -813,20 +891,34 @@
                 return matchLine && matchShift && matchSearch;
             });
             
-            if(currentUser.role === 'leader') renderLeaderQueue(filteredReqs); else renderSupplyDashboard(filteredReqs);
+            if(currentUser.role === 'leader') {
+                if (isLeaderGridView) {
+                    document.getElementById('leader-list-view').classList.add('hidden');
+                    document.getElementById('leader-grid-view').classList.remove('hidden');
+                    renderLeaderGrid(filteredReqs);
+                } else {
+                    document.getElementById('leader-grid-view').classList.add('hidden');
+                    document.getElementById('leader-list-view').classList.remove('hidden');
+                    renderLeaderQueue(filteredReqs);
+                }
+            } else {
+                renderSupplyDashboard(filteredReqs);
+            }
         }
 
         function renderLeaderQueue(requests) {
             const container = document.getElementById('leader-queue-container'); 
             container.innerHTML = '';
             
+            if (requests.length === 0) return;
+
             const grouped = groupRequestsByDate(requests);
-            // Mendapatkan tanggal unik berdasarkan urutan dari requests yang sudah diurutkan
             const uniqueDates = [...new Set(requests.map(r => new Date(r.timestamp).toLocaleDateString('id-ID', {day: '2-digit', month: 'long', year: 'numeric'})))];
             
+            let htmlStr = '';
             uniqueDates.forEach(dateStr => {
                 const groupColor = getColorForDate(dateStr);
-                const reqsInDate = grouped[dateStr];
+                const reqsInDate = grouped[dateStr] || [];
                 
                 const sortDateDir = document.getElementById('sort-date').value;
                 reqsInDate.sort((a,b) => {
@@ -834,7 +926,7 @@
                     return sortDateDir === 'asc' ? a.timestamp - b.timestamp : b.timestamp - a.timestamp;
                 });
 
-                let groupHTML = `
+                htmlStr += `
                 <div class="mb-4 border-2 rounded-xl p-2 shadow-sm ${groupColor.border} ${groupColor.bg} relative">
                     <div class="sticky top-2 z-20 w-max mb-2">
                         <div class="inline-block px-3 py-1 rounded-lg bg-white font-black text-[10px] uppercase tracking-wider border-2 ${groupColor.border} ${groupColor.text} shadow-md">
@@ -844,12 +936,82 @@
                     <div class="flex flex-col gap-2 relative z-10">`;
                 
                 reqsInDate.forEach(req => {
-                    groupHTML += generateCardHTML_Leader(req);
+                    htmlStr += generateCardHTML_Leader(req);
                 });
                 
-                groupHTML += `</div></div>`;
-                container.innerHTML += groupHTML;
+                htmlStr += `</div></div>`;
             });
+            container.innerHTML = htmlStr;
+        }
+
+        function renderLeaderGrid(requests) {
+            const dWaiting = document.getElementById('l-grid-wait-container'); 
+            const dProc = document.getElementById('l-grid-proc-container'); 
+            const dReady = document.getElementById('l-grid-ready-container');
+            
+            let iCount=0, pCount=0, rCount=0;
+
+            const waitReqs = requests.filter(r => r.status === STATUS_WAITING);
+            const procReqs = requests.filter(r => r.status === STATUS_PROCESSING);
+            const readyReqs = requests.filter(r => r.status === STATUS_READY || r.status === STATUS_PICKED_UP);
+
+            const getColHTML = (reqs, statType) => {
+                if (reqs.length === 0) return '';
+                const grouped = groupRequestsByDate(reqs);
+                const uniqueDates = [...new Set(reqs.map(r => new Date(r.timestamp).toLocaleDateString('id-ID', {day: '2-digit', month: 'long', year: 'numeric'})))];
+                let htmlStr = '';
+
+                uniqueDates.forEach(dateStr => {
+                    const groupColor = getColorForDate(dateStr);
+                    const reqsInDate = grouped[dateStr] || [];
+                    const sortDateDir = document.getElementById('sort-date').value;
+                    reqsInDate.sort((a,b) => {
+                        if (b.urgent !== a.urgent) return b.urgent - a.urgent;
+                        return sortDateDir === 'asc' ? a.timestamp - b.timestamp : b.timestamp - a.timestamp;
+                    });
+
+                    htmlStr += `
+                    <div class="mb-3 border rounded-lg p-1.5 ${groupColor.border} ${groupColor.bg} relative">
+                        <div class="sticky top-1 z-20 w-max mb-1.5">
+                            <div class="inline-block px-2 py-0.5 rounded bg-white font-black text-[8px] uppercase tracking-wider border ${groupColor.border} ${groupColor.text} shadow-sm">
+                                <i class="fas fa-calendar-day"></i> ${dateStr}
+                            </div>
+                        </div>
+                        <div class="flex flex-col gap-1.5 relative z-10">`;
+                    
+                    reqsInDate.forEach(req => {
+                        let actionBtnHTML='';
+                        const now = Date.now(); const lastPing = req.lastPingTime || 0; const isCooldown = (now-lastPing)<10000; const secLeft = isCooldown ? Math.ceil((10000-(now-lastPing))/1000) : 0;
+
+                        if(statType==='WAITING'){ 
+                            iCount++; 
+                            actionBtnHTML=`<button onclick="event.stopPropagation(); resendNotif('${req.id}')" class="ping-btn w-full py-1.5 bg-blue-100 text-brand-blue hover:bg-blue-200 border border-blue-200 text-[8px] font-black rounded uppercase shadow" data-ping-time="${lastPing}" ${isCooldown?'disabled':''}>${isCooldown?`${secLeft}s`:`<i class="fas fa-bell animate-pulse"></i> Ping`}</button>`; 
+                        }
+                        else if(statType==='PROCESSING'){ 
+                            pCount++; 
+                            actionBtnHTML=`<div class="text-[7px] font-bold text-blue-600 text-center uppercase py-1 border border-blue-200 bg-blue-50 rounded">Step ${req.step}/4</div>`;
+                        }
+                        else { 
+                            rCount++; 
+                            actionBtnHTML=(req.status===STATUS_READY || req.status===STATUS_PICKED_UP)?`<button onclick="event.stopPropagation(); openFinishModal('${req.id}')" class="w-full py-1.5 bg-brand-teal hover:bg-teal-700 text-white text-[8px] font-black rounded uppercase shadow"><i class="fas fa-check-double mr-1"></i>Selesai</button>`:`<div class="w-full text-center bg-purple-50 text-purple-600 text-[8px] font-bold py-1.5 rounded border border-purple-200">DIAMBIL</div>`; 
+                        }
+
+                        const timerHTML = statType==='WAITING' ? `<div class="w-[70px] flex flex-col items-center justify-center py-1 px-1 rounded-md bg-white/60 border border-transparent shadow-sm"><span class="timer-segment font-black text-[10px] leading-tight whitespace-nowrap" data-start="${req.timestamp}" data-end="${req.timeAccepted||''}" data-days="false">00:00:00</span></div>` : (statType==='PROCESSING' ? `<div class="w-[70px] flex flex-col items-center justify-center py-1.5 px-1 rounded-md bg-white/60 border border-transparent shadow-sm"><span class="timer-segment font-black text-[10px] leading-tight whitespace-nowrap" data-start="${req.timeAccepted||''}" data-end="${req.timeReady||''}" data-days="true">00:00:00</span></div>` : `<div class="w-[70px] flex flex-col items-center justify-center py-1 px-1 rounded-md bg-white/60 border border-transparent shadow-sm"><span class="timer-segment font-black text-[10px] leading-tight whitespace-nowrap" data-start="${req.timeReady||''}" data-end="${req.timeFinished||''}" data-days="false">00:00:00</span></div>`);
+                        
+                        htmlStr += generateCardHTML_Compact(req, actionBtnHTML, '', timerHTML);
+                    });
+                    htmlStr += `</div></div>`;
+                });
+                return htmlStr;
+            };
+
+            dWaiting.innerHTML = getColHTML(waitReqs, 'WAITING');
+            dProc.innerHTML = getColHTML(procReqs, 'PROCESSING');
+            dReady.innerHTML = getColHTML(readyReqs, 'READY');
+
+            document.getElementById('l-grid-wait-count').textContent=iCount; 
+            document.getElementById('l-grid-proc-count').textContent=pCount; 
+            document.getElementById('l-grid-ready-count').textContent=rCount;
         }
 
         function renderSupplyDashboard(requests) {
@@ -861,21 +1023,22 @@
             const procReqs = requests.filter(r => r.status === STATUS_PROCESSING);
             const readyReqs = requests.filter(r => r.status === STATUS_READY);
 
-            const renderCol = (reqs, container, statType) => {
+            const getColHTML = (reqs, statType) => {
+                if (reqs.length === 0) return '';
                 const grouped = groupRequestsByDate(reqs);
                 const uniqueDates = [...new Set(reqs.map(r => new Date(r.timestamp).toLocaleDateString('id-ID', {day: '2-digit', month: 'long', year: 'numeric'})))];
-                
+                let htmlStr = '';
+
                 uniqueDates.forEach(dateStr => {
                     const groupColor = getColorForDate(dateStr);
-                    const reqsInDate = grouped[dateStr];
-                    
+                    const reqsInDate = grouped[dateStr] || [];
                     const sortDateDir = document.getElementById('sort-date').value;
                     reqsInDate.sort((a,b) => {
                         if (b.urgent !== a.urgent) return b.urgent - a.urgent;
                         return sortDateDir === 'asc' ? a.timestamp - b.timestamp : b.timestamp - a.timestamp;
                     });
 
-                    let groupHTML = `
+                    htmlStr += `
                     <div class="mb-3 border rounded-lg p-1.5 ${groupColor.border} ${groupColor.bg} relative">
                         <div class="sticky top-1 z-20 w-max mb-1.5">
                             <div class="inline-block px-2 py-0.5 rounded bg-white font-black text-[8px] uppercase tracking-wider border ${groupColor.border} ${groupColor.text} shadow-sm">
@@ -901,19 +1064,18 @@
                             actionBtnHTML=`<button onclick="event.stopPropagation(); openFinishModal('${req.id}')" class="w-full h-full bg-brand-teal text-white text-[9px] font-bold py-1.5 rounded shadow">SELESAI</button>`; 
                         }
 
-                        const timerHTML = statType==='WAITING' ? `<div class="w-[100px] flex flex-col items-center justify-center py-1 px-1 rounded-md bg-orange-50 border border-orange-200 text-orange-600 shadow-sm"><span class="timer-segment font-black text-[10px] leading-tight whitespace-nowrap" data-start="${req.timestamp}" data-end="${req.timeAccepted||''}" data-days="false">00:00:00</span></div>` : (statType==='PROCESSING' ? `<div class="w-[100px] flex flex-col items-center justify-center py-1.5 px-1 rounded-md bg-blue-50 border border-blue-200 text-blue-600 shadow-sm"><span class="timer-segment font-black text-[10px] leading-tight whitespace-nowrap" data-start="${req.timeAccepted||''}" data-end="${req.timeReady||''}" data-days="true">00:00:00</span></div>` : `<div class="w-[100px] flex flex-col items-center justify-center py-1 px-1 rounded-md bg-green-50 text-green-600 shadow-sm border"><span class="timer-segment font-black text-[10px] leading-tight whitespace-nowrap" data-start="${req.timeReady||''}" data-end="${req.timeFinished||''}" data-days="false">00:00:00</span></div>`);
+                        const timerHTML = statType==='WAITING' ? `<div class="w-[100px] flex flex-col items-center justify-center py-1 px-1 rounded-md bg-white/60 border border-transparent shadow-sm"><span class="timer-segment font-black text-[10px] leading-tight whitespace-nowrap" data-start="${req.timestamp}" data-end="${req.timeAccepted||''}" data-days="false">00:00:00</span></div>` : (statType==='PROCESSING' ? `<div class="w-[100px] flex flex-col items-center justify-center py-1.5 px-1 rounded-md bg-white/60 border border-transparent shadow-sm"><span class="timer-segment font-black text-[10px] leading-tight whitespace-nowrap" data-start="${req.timeAccepted||''}" data-end="${req.timeReady||''}" data-days="true">00:00:00</span></div>` : `<div class="w-[100px] flex flex-col items-center justify-center py-1 px-1 rounded-md bg-white/60 border border-transparent shadow-sm"><span class="timer-segment font-black text-[10px] leading-tight whitespace-nowrap" data-start="${req.timeReady||''}" data-end="${req.timeFinished||''}" data-days="false">00:00:00</span></div>`);
                         
-                        groupHTML += generateCardHTML_Warehouse(req, actionBtnHTML, progressHTML, timerHTML);
+                        htmlStr += generateCardHTML_Compact(req, actionBtnHTML, progressHTML, timerHTML);
                     });
-                    
-                    groupHTML += `</div></div>`;
-                    container.innerHTML += groupHTML;
+                    htmlStr += `</div></div>`;
                 });
-            }
+                return htmlStr;
+            };
 
-            renderCol(waitReqs, dWaiting, 'WAITING');
-            renderCol(procReqs, dProc, 'PROCESSING');
-            renderCol(readyReqs, dReady, 'READY');
+            dWaiting.innerHTML = getColHTML(waitReqs, 'WAITING');
+            dProc.innerHTML = getColHTML(procReqs, 'PROCESSING');
+            dReady.innerHTML = getColHTML(readyReqs, 'READY');
 
             document.getElementById('incoming-count').textContent=iCount; document.getElementById('processing-count').textContent=pCount; document.getElementById('ready-count').textContent=rCount;
             
@@ -923,7 +1085,7 @@
             if(unreadReady>0){ bRdy.innerHTML=`${unreadReady} <i class="fas fa-envelope ml-0.5 text-[6px]"></i>`; bRdy.classList.remove('hidden'); } else bRdy.classList.add('hidden');
         }
 
-        function acceptRequestMarker(id) { const idx = db.requests.findIndex(r => r.id === id); if(idx > -1) { db.requests[idx].status = STATUS_PROCESSING; db.requests[idx].step = 1; db.requests[idx].timeAccepted = Date.now(); saveDB(); } }
+        function acceptRequestMarker(id) { const idx = db.requests.findIndex(r => r.id === id); if(idx > -1) { db.requests[idx].status = STATUS_PROCESSING; db.requests[idx].step = 1; db.requests[idx].timeAccepted = Date.now(); db.requests[idx].lastSignal = 'accepted_' + Date.now(); saveDB(); } }
         function openProgressModal(id) { 
             const req = db.requests.find(r => r.id === id); if(!req) return; 
             document.getElementById('progress-req-id').value = id; 
@@ -950,11 +1112,33 @@
             saveDB(); closeModal('modal-progress'); 
         }
 
+        function leaderPickUp(id) { const idx = db.requests.findIndex(r => r.id === id); if(idx > -1) { db.requests[idx].status = STATUS_PICKED_UP; db.requests[idx].timePickedUp = Date.now(); db.requests[idx].lastSignal = 'pickedup_'+Date.now(); saveDB(); showMessage("Berhasil! Menunggu gudang menyelesaikan tiket."); } }
+        
         function openFinishModal(id) { 
+            const req = db.requests.find(r => r.id === id) || loadedHistoryData.find(r => r.id === id);
             document.getElementById('finish-req-id').value = id; 
-            document.getElementById('picker-name-input').value = ''; 
+            
+            const pInput = document.getElementById('picker-name-input');
+            const mpInput = document.getElementById('picker-mp-input');
+            
+            // Auto-fill logic depending on who finishes it
+            if(currentUser.role === 'leader') {
+                pInput.value = currentUser.name;
+                mpInput.value = (req && req.supplierBy) ? req.supplierBy : '';
+            } else {
+                pInput.value = '';
+                mpInput.value = currentUser.name || '';
+            }
+
             openModal('modal-picker'); 
-            setTimeout(() => document.getElementById('picker-name-input').focus(), 100); 
+            setTimeout(() => {
+                if(currentUser.role === 'leader') {
+                    if(!mpInput.value) mpInput.focus();
+                    else pInput.focus();
+                } else {
+                    pInput.focus();
+                }
+            }, 100); 
         }
 
         async function archiveToFirestore(finishedReq) {
@@ -1014,7 +1198,11 @@
             if (!req || req.status === STATUS_FINISHED) return; 
             
             if(currentUser.role === 'leader') {
-                cancelTargetId = id; document.getElementById('cancel-input').value = ''; document.getElementById('cancel-error').classList.add('hidden'); openModal('modal-cancel'); 
+                if(req.status === STATUS_READY) {
+                    openFinishModal(id);
+                } else {
+                    cancelTargetId = id; document.getElementById('cancel-input').value = ''; document.getElementById('cancel-error').classList.add('hidden'); openModal('modal-cancel'); 
+                }
             } else if (currentUser.role === 'warehouse' && req.status === STATUS_READY) {
                 openFinishModal(id);
             }
@@ -1107,7 +1295,7 @@
             const limitedReqs = filtered.slice(0, 50);
 
             if(limitedReqs.length === 0) { h.innerHTML = `<div class="text-center text-gray-400 text-xs font-bold py-10">Belum ada history</div>`; return; }
-            h.innerHTML = limitedReqs.map(req => `<div onclick="showDetailModal('${req.id}')" class="cursor-pointer bg-white border border-gray-100 rounded-lg shadow-sm hover:shadow mb-2"><div class="bg-gray-50 flex justify-between items-center px-2.5 py-1.5 border-b"><div class="flex items-center gap-1.5 overflow-hidden flex-1 pr-2"><span class="font-display font-black text-[13px] text-brand-blue shrink-0">${req.displayId||'#'+req.queueNum}</span><span class="text-[8px] font-bold uppercase px-1.5 rounded border shrink-0 ${req.type==='ALL'?'bg-blue-100 text-blue-700':'bg-purple-100 text-purple-700'}">${req.type}</span><span class="text-[10px] font-bold text-gray-700 truncate">${req.items.map(i=>i.assy).join(', ')}</span></div><span class="text-[8px] text-green-600 font-bold uppercase shrink-0"><i class="fas fa-check"></i> Selesai</span></div><div class="px-2.5 py-1.5 flex justify-between items-center text-[9px] text-gray-400"><span class="font-bold truncate pr-2"><i class="fas fa-hand-holding"></i> ${req.pickedBy || req.requestedBy}</span><span class="font-mono bg-gray-100 px-1.5 py-0.5 rounded text-gray-500 shrink-0">${new Date(req.timeFinished||req.timestamp).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})} | ${new Date(req.timeFinished||req.timestamp).toLocaleDateString()}</span></div></div>`).join('');
+            h.innerHTML = limitedReqs.map(req => `<div onclick="showDetailModal('${req.id}')" class="cursor-pointer bg-white border border-gray-100 rounded-lg shadow-sm hover:shadow mb-2"><div class="bg-gray-50 flex justify-between items-center px-2.5 py-1.5 border-b"><div class="flex items-center gap-1.5 overflow-hidden flex-1 pr-2"><span class="font-display font-black text-[11px] px-2 py-0.5 rounded border ${getLineColor(req.items[0].line)} shrink-0">${req.displayId||'#'+req.queueNum}</span><span class="text-[8px] font-bold uppercase px-1.5 rounded border shrink-0 ${req.type==='ALL'?'bg-blue-100 text-blue-700':'bg-purple-100 text-purple-700'}">${req.type}</span><span class="text-[10px] font-bold text-gray-700 truncate">${req.items.map(i=>i.assy).join(', ')}</span></div><span class="text-[8px] text-green-600 font-bold uppercase shrink-0"><i class="fas fa-check"></i> Selesai</span></div><div class="px-2.5 py-1.5 flex justify-between items-center text-[9px] text-gray-400"><span class="font-bold truncate pr-2"><i class="fas fa-hand-holding"></i> ${req.pickedBy || req.requestedBy}</span><span class="font-mono bg-gray-100 px-1.5 py-0.5 rounded text-gray-500 shrink-0">${new Date(req.timeFinished||req.timestamp).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})} | ${new Date(req.timeFinished||req.timestamp).toLocaleDateString()}</span></div></div>`).join('');
         }
 
         function toggleChatPanel() { const c = document.getElementById('chat-panel-container'); const d = document.getElementById('detail-panel-container'); const b = document.getElementById('toggle-chat-btn'); if (c.classList.contains('hidden')) { c.classList.remove('hidden'); d.classList.remove('w-full'); d.classList.add('w-2/3'); b.innerHTML=`<i class="fas fa-eye-slash mr-1"></i> Sembunyikan Chat`; } else { c.classList.add('hidden'); d.classList.remove('w-2/3'); d.classList.add('w-full'); b.innerHTML=`<i class="fas fa-comment-dots mr-1"></i> Tampilkan Chat`; } }
@@ -1204,7 +1392,9 @@
                 <div id="detail-panel-container" class="w-2/3 bg-white rounded-2xl shadow-2xl flex flex-col overflow-hidden border relative transition-all duration-300 origin-right"><div class="px-6 py-4 border-b bg-gray-50 flex justify-between shrink-0"><h3 class="font-display font-black text-lg text-brand-blue"><i class="fas fa-info-circle text-brand-teal"></i> Detail MARKER</h3><div class="flex items-center gap-3"><button id="toggle-chat-btn" onclick="toggleChatPanel()" class="text-[10px] font-bold text-gray-500 bg-white border px-3 py-1.5 rounded uppercase"><i class="fas fa-eye-slash mr-1"></i> Sembunyikan Chat</button><button onclick="closeModal('modal-detail')" class="text-gray-400 hover:text-red-500 bg-white rounded-full w-8 h-8 border"><i class="fas fa-times"></i></button></div></div><div class="p-6 flex-1 overflow-y-auto">
                     <div class="flex justify-between items-start mb-5">
                         <div>
-                            <h2 class="text-3xl font-display font-black text-brand-blue leading-none">${req.displayId || req.queueNum}</h2>
+                            <div class="px-4 py-2 rounded-xl border-2 shadow-sm ${getLineColor(req.items[0].line)} inline-block mb-1">
+                                <h2 class="text-3xl font-display font-black leading-none">${req.displayId || req.queueNum}</h2>
+                            </div>
                             ${req.status !== STATUS_FINISHED && currentUser.role === 'leader' ? `
                             <label class="flex items-center cursor-pointer mt-3 group">
                                 <div class="relative flex items-center">
