@@ -225,7 +225,6 @@
 
                     <h2 id="stat-title-display" class="font-display font-black text-2xl text-brand-blue mb-6 text-center uppercase tracking-wider">STATISTIK KANBAN (ALL)</h2>
                     
-                    <!-- Container 1: Overview Averages -->
                     <div id="stat-overview-container">
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-200 flex flex-col items-center justify-center text-center relative overflow-hidden group">
@@ -247,7 +246,6 @@
                         </div>
                     </div>
 
-                    <!-- Container 2: Assy Process Times -->
                     <div id="stat-assy-container" class="hidden">
                         <div class="bg-white p-5 rounded-2xl border border-gray-200 shadow-sm">
                             <div class="flex justify-between items-center border-b border-gray-100 pb-3 mb-4">
@@ -341,7 +339,7 @@
         let tempAssyListMarker = []; let currentKanbanTypeMarker = 'ALL'; let imppMarkersData = [];
         let timeInterval = null; let clockInterval = null; let isHistoryOpen = false; let cancelTargetId = null;
         let currentStatTab = 'ALL';
-        let isLeaderGridView = false;
+        let isLeaderGridView = false; // State untuk Toggle Grid/List
         const STATUS_WAITING = 'WAITING'; const STATUS_PROCESSING = 'PROCESSING'; const STATUS_READY = 'READY'; const STATUS_PICKED_UP = 'PICKED_UP'; const STATUS_FINISHED = 'FINISHED';
 
         let whPresenceInterval = null;
@@ -425,8 +423,11 @@
             const savedUser = sessionStorage.getItem('eks_unified_user'); 
             if (savedUser) { 
                 currentUser = JSON.parse(savedUser); 
+                
+                // Ambil preferensi view sebelumnya (bila ada)
                 const savedView = localStorage.getItem('eks_leader_view');
                 if(savedView === 'grid') isLeaderGridView = true;
+
                 showApp(); 
             } 
         }
@@ -517,7 +518,7 @@
             } else { 
                 document.getElementById('dashboard-leader').classList.add('hidden'); document.getElementById('dashboard-warehouse').classList.remove('hidden'); document.getElementById('btn-new-kanban').classList.add('hidden'); 
                 document.getElementById('btn-stats').classList.remove('hidden');
-                document.getElementById('btn-toggle-view').classList.add('hidden'); 
+                document.getElementById('btn-toggle-view').classList.add('hidden'); // Sembunyikan grid toggle untuk warehouse
                 document.getElementById('wh-presence-container').classList.add('hidden'); 
                 
                 whPresenceInterval = setInterval(updateWarehousePresence, 5000);
@@ -541,6 +542,14 @@
             if(lineStr === 'Line Proto') return 'P';
             if(lineStr === 'Line HA') return 'H';
             return 'X';
+        }
+
+        function getLineColor(lineStr) {
+            if(lineStr === 'Line Crimping') return 'bg-orange-50 border-orange-200 text-orange-700';
+            if(lineStr === 'Line SMV') return 'bg-yellow-50 border-yellow-200 text-yellow-700';
+            if(lineStr === 'Line Proto') return 'bg-blue-50 border-blue-200 text-blue-700';
+            if(lineStr === 'Line HA') return 'bg-red-50 border-red-200 text-red-700';
+            return 'bg-gray-50 border-gray-200 text-gray-700';
         }
 
         function generateId() { return 'REQ-' + Date.now().toString(36).toUpperCase(); }
@@ -775,14 +784,6 @@
             return groups;
         }
 
-        function getLineColor(line) {
-            if(line === 'Line Proto') return 'bg-blue-100 text-blue-800 border-blue-300';
-            if(line === 'Line Crimping') return 'bg-orange-100 text-orange-800 border-orange-300';
-            if(line === 'Line HA') return 'bg-red-100 text-red-800 border-red-300';
-            if(line === 'Line SMV') return 'bg-yellow-100 text-yellow-800 border-yellow-300';
-            return 'bg-gray-100 text-gray-800 border-gray-300';
-        }
-
         // POKA-YOKE Visual: Pewarnaan latar otomatis berbasis status
         function getStatusBgClass(req) {
             if (req.urgent) return 'bg-red-50/90 border-red-400 border-2';
@@ -798,6 +799,9 @@
             const now = Date.now(); const lastPing = req.lastPingTime || 0; const isCooldown = (now-lastPing)<10000; const secLeft = isCooldown ? Math.ceil((10000-(now-lastPing))/1000) : 0;
             const item = req.items[0];
             
+            const hasNote = req.items.some(i => i.note && i.note.trim() !== '');
+            const noteIndicator = hasNote ? `<div class="w-2 h-2 rounded-full bg-yellow-400 ml-1.5 shadow-sm border border-yellow-500 inline-block shrink-0" title="Ada Keterangan Tambahan"></div>` : '';
+
             const tWait = `<div class="w-[120px] flex flex-col items-center justify-center py-2 px-1 rounded-md transition-all ${req.status==='WAITING'?'bg-orange-50 border border-orange-200 text-orange-600 shadow-sm z-10 scale-105':'text-gray-400 bg-white/60 border border-transparent'}"><span class="timer-segment font-black text-[11px] whitespace-nowrap leading-tight px-1" data-start="${req.timestamp}" data-end="${req.timeAccepted || ''}" data-days="false">00:00:00</span><span class="text-[9px] uppercase tracking-wider font-bold mt-1">Wait</span></div>`;
             const tProc = `<div class="w-[120px] flex flex-col items-center justify-center py-2 px-1 rounded-md transition-all ${req.status==='PROCESSING'?'bg-blue-50 border border-blue-200 text-blue-600 shadow-sm z-10 scale-105':'text-gray-400 bg-white/60 border border-transparent'}"><span class="timer-segment font-black text-[11px] whitespace-nowrap leading-tight px-1" data-start="${req.timeAccepted || ''}" data-end="${req.timeReady || ''}" data-days="true">00:00:00</span><span class="text-[9px] uppercase tracking-wider font-bold mt-1">Process</span></div>`;
             const tRdy  = `<div class="w-[120px] flex flex-col items-center justify-center py-2 px-1 rounded-md transition-all ${req.status==='READY'?'bg-green-50 border border-green-200 text-green-600 shadow-sm z-10 scale-105':'text-gray-400 bg-white/60 border border-transparent'}"><span class="timer-segment font-black text-[11px] whitespace-nowrap leading-tight px-1" data-start="${req.timeReady || ''}" data-end="${req.timeFinished || ''}" data-days="false">00:00:00</span><span class="text-[9px] uppercase tracking-wider font-bold mt-1">Ready</span></div>`;
@@ -821,8 +825,8 @@
                     </div>
                     <div class="flex-1 pl-3 border-l-2 border-white/60 overflow-hidden">
                         <div class="flex flex-wrap items-center gap-2 mb-1.5">
-                            <span class="font-display font-black text-lg text-gray-800 uppercase leading-none">${item.assy} ${req.items.length>1?`<span class="text-[10px] text-gray-400 font-normal italic">(+${req.items.length-1})</span>`:''}</span>
-                            <span class="bg-gray-800 text-white px-2 py-0.5 rounded text-[10px] font-black uppercase shadow-sm">WP: ${item.wp||'-'}</span>
+                            <span class="font-display font-black text-lg text-gray-800 uppercase leading-none flex items-center">${item.assy} ${req.items.length>1?`<span class="text-[10px] text-gray-400 font-normal italic ml-1">(+${req.items.length-1})</span>`:''}${noteIndicator}</span>
+                            <span class="bg-gray-800 text-white px-2 py-0.5 rounded text-[10px] font-black uppercase shadow-sm ml-1">WP: ${item.wp||'-'}</span>
                             <span class="bg-blue-600 text-white px-2 py-0.5 rounded text-[10px] font-black shadow-sm">QTY: ${req.items.reduce((sum, i) => sum + Number(i.qty), 0)}</span>
                             ${item.lot ? `<span class="bg-purple-600 text-white px-2 py-0.5 rounded text-[10px] font-black shadow-sm">${item.lot}</span>` : ''}
                         </div>
@@ -845,6 +849,10 @@
             const isUrgent = req.urgent;
             const bgClass = getStatusBgClass(req);
             const unreadCount = (req.messages||[]).filter(m=>m.senderRole!==currentUser.role&&!m.isRead).length;
+            
+            const hasNote = req.items.some(i => i.note && i.note.trim() !== '');
+            const noteIndicator = hasNote ? `<div class="w-1.5 h-1.5 rounded-full bg-yellow-400 ml-1 shadow-sm border border-yellow-500 inline-block shrink-0" title="Ada Keterangan Tambahan"></div>` : '';
+            
             return `
             <div onclick="showDetailModal('${req.id}')" oncontextmenu="handleRightClick(event, '${req.id}')" class="cursor-pointer flex items-stretch gap-1 p-1.5 ${bgClass} rounded-lg shadow-sm hover:shadow relative min-h-[60px]">
                 ${req.urgent?'<div class="absolute left-0 top-0 bottom-0 w-1 bg-red-500 rounded-l-lg blink-urgent z-10"></div>':''}
@@ -856,7 +864,7 @@
                     </div>
                 </div>
                 <div class="flex-1 flex flex-col justify-center min-w-[40px] overflow-hidden px-1">
-                    <div class="text-[10px] font-black text-gray-800 truncate">${req.items[0].assy} ${req.items.length>1?`<span class="text-[8px] text-gray-400 italic">(+${req.items.length-1})</span>`:''}</div>
+                    <div class="text-[10px] font-black text-gray-800 truncate flex items-center">${req.items[0].assy} ${req.items.length>1?`<span class="text-[8px] text-gray-400 italic ml-1">(+${req.items.length-1})</span>`:''}${noteIndicator}</div>
                     <div class="flex flex-wrap items-center gap-1 mt-1">
                         <span class="text-[6px] font-bold px-1 rounded uppercase border ${req.type==='ALL'?'bg-blue-100 text-blue-700':'bg-purple-100 text-purple-700'}">${req.type}</span>
                         <span class="text-[6px] font-bold bg-orange-100 text-orange-700 px-1 rounded uppercase border">SH-${req.shift||'-'}</span>
@@ -1085,7 +1093,7 @@
             if(unreadReady>0){ bRdy.innerHTML=`${unreadReady} <i class="fas fa-envelope ml-0.5 text-[6px]"></i>`; bRdy.classList.remove('hidden'); } else bRdy.classList.add('hidden');
         }
 
-        function acceptRequestMarker(id) { const idx = db.requests.findIndex(r => r.id === id); if(idx > -1) { db.requests[idx].status = STATUS_PROCESSING; db.requests[idx].step = 1; db.requests[idx].timeAccepted = Date.now(); db.requests[idx].lastSignal = 'accepted_' + Date.now(); saveDB(); } }
+        function acceptRequestMarker(id) { const idx = db.requests.findIndex(r => r.id === id); if(idx > -1) { db.requests[idx].status = STATUS_PROCESSING; db.requests[idx].step = 1; db.requests[idx].timeAccepted = Date.now(); saveDB(); } }
         function openProgressModal(id) { 
             const req = db.requests.find(r => r.id === id); if(!req) return; 
             document.getElementById('progress-req-id').value = id; 
@@ -1115,29 +1123,15 @@
         function leaderPickUp(id) { const idx = db.requests.findIndex(r => r.id === id); if(idx > -1) { db.requests[idx].status = STATUS_PICKED_UP; db.requests[idx].timePickedUp = Date.now(); db.requests[idx].lastSignal = 'pickedup_'+Date.now(); saveDB(); showMessage("Berhasil! Menunggu gudang menyelesaikan tiket."); } }
         
         function openFinishModal(id) { 
-            const req = db.requests.find(r => r.id === id) || loadedHistoryData.find(r => r.id === id);
             document.getElementById('finish-req-id').value = id; 
             
-            const pInput = document.getElementById('picker-name-input');
-            const mpInput = document.getElementById('picker-mp-input');
+            // Cegah error: Pastikan input ada sebelum direset
+            const nameInput = document.getElementById('picker-name-input');
+            if (nameInput) nameInput.value = ''; 
             
-            // Auto-fill logic depending on who finishes it
-            if(currentUser.role === 'leader') {
-                pInput.value = currentUser.name;
-                mpInput.value = (req && req.supplierBy) ? req.supplierBy : '';
-            } else {
-                pInput.value = '';
-                mpInput.value = currentUser.name || '';
-            }
-
             openModal('modal-picker'); 
             setTimeout(() => {
-                if(currentUser.role === 'leader') {
-                    if(!mpInput.value) mpInput.focus();
-                    else pInput.focus();
-                } else {
-                    pInput.focus();
-                }
+                if (nameInput) nameInput.focus();
             }, 100); 
         }
 
@@ -1198,11 +1192,7 @@
             if (!req || req.status === STATUS_FINISHED) return; 
             
             if(currentUser.role === 'leader') {
-                if(req.status === STATUS_READY) {
-                    openFinishModal(id);
-                } else {
-                    cancelTargetId = id; document.getElementById('cancel-input').value = ''; document.getElementById('cancel-error').classList.add('hidden'); openModal('modal-cancel'); 
-                }
+                cancelTargetId = id; document.getElementById('cancel-input').value = ''; document.getElementById('cancel-error').classList.add('hidden'); openModal('modal-cancel'); 
             } else if (currentUser.role === 'warehouse' && req.status === STATUS_READY) {
                 openFinishModal(id);
             }
@@ -1295,7 +1285,7 @@
             const limitedReqs = filtered.slice(0, 50);
 
             if(limitedReqs.length === 0) { h.innerHTML = `<div class="text-center text-gray-400 text-xs font-bold py-10">Belum ada history</div>`; return; }
-            h.innerHTML = limitedReqs.map(req => `<div onclick="showDetailModal('${req.id}')" class="cursor-pointer bg-white border border-gray-100 rounded-lg shadow-sm hover:shadow mb-2"><div class="bg-gray-50 flex justify-between items-center px-2.5 py-1.5 border-b"><div class="flex items-center gap-1.5 overflow-hidden flex-1 pr-2"><span class="font-display font-black text-[11px] px-2 py-0.5 rounded border ${getLineColor(req.items[0].line)} shrink-0">${req.displayId||'#'+req.queueNum}</span><span class="text-[8px] font-bold uppercase px-1.5 rounded border shrink-0 ${req.type==='ALL'?'bg-blue-100 text-blue-700':'bg-purple-100 text-purple-700'}">${req.type}</span><span class="text-[10px] font-bold text-gray-700 truncate">${req.items.map(i=>i.assy).join(', ')}</span></div><span class="text-[8px] text-green-600 font-bold uppercase shrink-0"><i class="fas fa-check"></i> Selesai</span></div><div class="px-2.5 py-1.5 flex justify-between items-center text-[9px] text-gray-400"><span class="font-bold truncate pr-2"><i class="fas fa-hand-holding"></i> ${req.pickedBy || req.requestedBy}</span><span class="font-mono bg-gray-100 px-1.5 py-0.5 rounded text-gray-500 shrink-0">${new Date(req.timeFinished||req.timestamp).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})} | ${new Date(req.timeFinished||req.timestamp).toLocaleDateString()}</span></div></div>`).join('');
+            h.innerHTML = limitedReqs.map(req => `<div onclick="showDetailModal('${req.id}')" class="cursor-pointer bg-white border border-gray-100 rounded-lg shadow-sm hover:shadow mb-2"><div class="bg-gray-50 flex justify-between items-center px-2.5 py-1.5 border-b"><div class="flex items-center gap-1.5 overflow-hidden flex-1 pr-2"><span class="font-display font-black text-[13px] text-brand-blue shrink-0">${req.displayId||'#'+req.queueNum}</span><span class="text-[8px] font-bold uppercase px-1.5 rounded border shrink-0 ${req.type==='ALL'?'bg-blue-100 text-blue-700':'bg-purple-100 text-purple-700'}">${req.type}</span><span class="text-[10px] font-bold text-gray-700 truncate">${req.items.map(i=>i.assy).join(', ')}</span></div><span class="text-[8px] text-green-600 font-bold uppercase shrink-0"><i class="fas fa-check"></i> Selesai</span></div><div class="px-2.5 py-1.5 flex justify-between items-center text-[9px] text-gray-400"><span class="font-bold truncate pr-2"><i class="fas fa-hand-holding"></i> ${req.pickedBy || req.requestedBy}</span><span class="font-mono bg-gray-100 px-1.5 py-0.5 rounded text-gray-500 shrink-0">${new Date(req.timeFinished||req.timestamp).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})} | ${new Date(req.timeFinished||req.timestamp).toLocaleDateString()}</span></div></div>`).join('');
         }
 
         function toggleChatPanel() { const c = document.getElementById('chat-panel-container'); const d = document.getElementById('detail-panel-container'); const b = document.getElementById('toggle-chat-btn'); if (c.classList.contains('hidden')) { c.classList.remove('hidden'); d.classList.remove('w-full'); d.classList.add('w-2/3'); b.innerHTML=`<i class="fas fa-eye-slash mr-1"></i> Sembunyikan Chat`; } else { c.classList.add('hidden'); d.classList.remove('w-2/3'); d.classList.add('w-full'); b.innerHTML=`<i class="fas fa-comment-dots mr-1"></i> Tampilkan Chat`; } }
@@ -1392,9 +1382,7 @@
                 <div id="detail-panel-container" class="w-2/3 bg-white rounded-2xl shadow-2xl flex flex-col overflow-hidden border relative transition-all duration-300 origin-right"><div class="px-6 py-4 border-b bg-gray-50 flex justify-between shrink-0"><h3 class="font-display font-black text-lg text-brand-blue"><i class="fas fa-info-circle text-brand-teal"></i> Detail MARKER</h3><div class="flex items-center gap-3"><button id="toggle-chat-btn" onclick="toggleChatPanel()" class="text-[10px] font-bold text-gray-500 bg-white border px-3 py-1.5 rounded uppercase"><i class="fas fa-eye-slash mr-1"></i> Sembunyikan Chat</button><button onclick="closeModal('modal-detail')" class="text-gray-400 hover:text-red-500 bg-white rounded-full w-8 h-8 border"><i class="fas fa-times"></i></button></div></div><div class="p-6 flex-1 overflow-y-auto">
                     <div class="flex justify-between items-start mb-5">
                         <div>
-                            <div class="px-4 py-2 rounded-xl border-2 shadow-sm ${getLineColor(req.items[0].line)} inline-block mb-1">
-                                <h2 class="text-3xl font-display font-black leading-none">${req.displayId || req.queueNum}</h2>
-                            </div>
+                            <h2 class="text-3xl font-display font-black text-brand-blue leading-none">${req.displayId || req.queueNum}</h2>
                             ${req.status !== STATUS_FINISHED && currentUser.role === 'leader' ? `
                             <label class="flex items-center cursor-pointer mt-3 group">
                                 <div class="relative flex items-center">
