@@ -938,7 +938,7 @@
         }
 
         async function resetMasterData() {
-            if(confirm("Hapus SELUR Master Data MPP dari Server? Tindakan ini tidak dapat dibatalkan.")) {
+            if(confirm("Hapus SELURUH Master Data MPP dari Server? Tindakan ini tidak dapat dibatalkan.")) {
                 globalMasterData = []; masterHeaders = []; activePeriodeTab = 'ALL'; uploadedMasterFiles = []; masterHeadersSet.clear();
                 try {
                     await saveDB('master_headers', []); await saveDB('uploaded_master_files', []);
@@ -1298,13 +1298,13 @@
 
             try {
                 await syncWipToCloud();
-                await syncMasterToCloud(); 
+                await syncMasterToCloud(); // Save potentially new Auto-Inserted rows
                 await saveDB('last_wip_date', todayStr);
                 
                 updateInputStats(); renderUploadedFiles();
                 
                 updateWipDependencies(); 
-                updateGlobalThresholdUI(); 
+                updateGlobalThresholdUI(); // Auto update cut-off & delay UI in background
                 
                 await recalculateValidation();
                 overlay.classList.add('hidden');
@@ -1319,6 +1319,7 @@
             const tbody = document.getElementById('stwc-tbody');
             let html = '';
             
+            // Re-sync Unique WPP list just in case
             updateWipDependencies();
             
             if(globalUniquePeriodeWPP.length === 0) {
@@ -1327,6 +1328,7 @@
                 globalUniquePeriodeWPP.forEach(pwKey => {
                     let [per, wpp] = pwKey.split('_');
                     
+                    // Cek dari Settings, jika tidak ada, intip default dari Master (MPP)
                     let currentStwc = globalSTWCSettings[pwKey] || '';
                     if(!currentStwc) {
                         let mppMatch = globalMasterData.find(m => m.PERIODE === per && getWPP(m.WP || '') === wpp && m.STWC);
@@ -1336,7 +1338,7 @@
                     let inputVal = '';
                     if(currentStwc) {
                         let parts = currentStwc.split('-');
-                        if(parts.length === 3) inputVal = `${parts[2]}-${parts[1]}-${parts[0]}`; 
+                        if(parts.length === 3) inputVal = `${parts[2]}-${parts[1]}-${parts[0]}`; // To YYYY-MM-DD for input date
                     }
                     html += `
                     <tr class="hover:bg-gray-50 transition">
@@ -1362,12 +1364,13 @@
                 let el = document.getElementById(`input_stwc_${pwKey}`);
                 if(el && el.value) {
                     let parts = el.value.split('-');
-                    globalSTWCSettings[pwKey] = `${parts[2]}-${parts[1]}-${parts[0]}`; 
+                    globalSTWCSettings[pwKey] = `${parts[2]}-${parts[1]}-${parts[0]}`; // Back to DD-MM-YYYY
                 } else {
                     delete globalSTWCSettings[pwKey];
                 }
             });
 
+            // Terapkan ke Master Data
             globalMasterData.forEach(m => {
                 let pwKey = (m.PERIODE || '-') + '_' + getWPP(m.WP || '-');
                 if (globalSTWCSettings[pwKey]) {
@@ -1504,29 +1507,46 @@
             const btns = document.getElementById('overview-export-buttons-hide');
             if(btns) btns.style.display = 'none';
 
+            // Kloning dashboard ke belakang layar
             const printBox = document.createElement('div');
             printBox.style.position = 'absolute';
             printBox.style.top = '-9999px';
             printBox.style.left = '-9999px';
-            printBox.style.width = '1400px'; 
+            printBox.style.width = '1400px'; // Paksa ukuran desktop
             printBox.style.background = '#f4f5f7';
             printBox.style.padding = '30px';
             printBox.style.fontFamily = "'Inter', sans-serif";
             
             const clone = source.cloneNode(true);
+            
+            // Hapus tombol export pada kloningan agar tidak ikut terfoto dan MENCEGAH BUG KLIK MENEMBUS KE BAWAH
             const cloneBtns = clone.querySelector('#overview-export-buttons-hide');
             if(cloneBtns) cloneBtns.remove();
 
+            // Memaksa mode desktop (Mencegah elemen bertumpuk karena zoom/layar kecil)
             clone.querySelectorAll('*').forEach(el => {
                 if(typeof el.className === 'string') {
-                    if (el.className.includes('lg:flex-row') || el.className.includes('xl:flex-row')) el.className = el.className.replace('flex-col', '').replace(/lg:flex-row/g, 'flex-row').replace(/xl:flex-row/g, 'flex-row');
-                    if (el.className.includes('lg:items-stretch')) el.className = el.className.replace('items-center', '').replace(/lg:items-stretch/g, 'items-stretch');
-                    if (el.className.includes('hidden lg:block') || el.className.includes('hidden xl:block')) el.className = el.className.replace('hidden', 'block');
-                    el.className = el.className.replace(/md:grid-cols-(\d+)/g, 'grid-cols-$1').replace(/lg:grid-cols-(\d+)/g, 'grid-cols-$1');
-                    el.className = el.className.replace(/lg:w-/g, 'w-').replace(/lg:min-w-/g, 'min-w-').replace(/lg:h-/g, 'h-').replace(/lg:p-/g, 'p-').replace(/lg:px-/g, 'px-').replace(/lg:py-/g, 'py-').replace(/lg:gap-/g, 'gap-').replace(/lg:ml-/g, 'ml-').replace(/lg:text-/g, 'text-');
+                    if (el.className.includes('lg:flex-row') || el.className.includes('xl:flex-row')) {
+                        el.className = el.className.replace('flex-col', '').replace(/lg:flex-row/g, 'flex-row').replace(/xl:flex-row/g, 'flex-row');
+                    }
+                    if (el.className.includes('lg:items-stretch')) {
+                        el.className = el.className.replace('items-center', '').replace(/lg:items-stretch/g, 'items-stretch');
+                    }
+                    if (el.className.includes('hidden lg:block') || el.className.includes('hidden xl:block')) {
+                        el.className = el.className.replace('hidden', 'block');
+                    }
+                    el.className = el.className.replace(/md:grid-cols-(\d+)/g, 'grid-cols-$1');
+                    el.className = el.className.replace(/lg:grid-cols-(\d+)/g, 'grid-cols-$1');
+                    el.className = el.className.replace(/lg:w-/g, 'w-').replace(/lg:min-w-/g, 'min-w-');
+                    el.className = el.className.replace(/lg:h-/g, 'h-');
+                    el.className = el.className.replace(/lg:p-/g, 'p-').replace(/lg:px-/g, 'px-').replace(/lg:py-/g, 'py-');
+                    el.className = el.className.replace(/lg:gap-/g, 'gap-');
+                    el.className = el.className.replace(/lg:ml-/g, 'ml-');
+                    el.className = el.className.replace(/lg:text-/g, 'text-');
                 }
             });
 
+            // Menyuntikkan style pemaksa agar teks rapi & proporsional saat diexport
             const style = document.createElement('style');
             style.innerHTML = `
                 * { font-family: 'Inter', sans-serif !important; line-height: 1.4 !important; }
@@ -1547,6 +1567,7 @@
             printBox.appendChild(style);
             document.body.appendChild(printBox);
 
+            // Memindahkan gambar grafik canvas dari asli ke kloning (Krusial, krn cloneNode tidak mengopi canvas)
             const sourceCanvases = source.querySelectorAll('canvas');
             const clonedCanvases = clone.querySelectorAll('canvas');
             sourceCanvases.forEach((canvas, index) => {
@@ -1717,7 +1738,7 @@
                 html += `<tr class="border-b border-gray-100 hover:bg-gray-50 transition drill-row"><td class="p-2.5 text-center stat-cell">${badge}</td><td class="p-2.5 font-bold text-gray-800 assy-cell">${m.ASSY||'-'}</td><td class="p-2.5 font-mono text-gray-500 wp-cell">${m.WP||'-'}</td><td class="p-2.5 text-center font-bold">${m.STWC||'-'}</td><td class="p-2.5 text-center text-indigo-700 font-bold">${qtyDisplay}</td><td class="p-2.5 text-center text-purple-600 font-bold">${qtyCctDisplay}</td><td class="p-2.5 text-center font-bold text-gray-800 bg-gray-50/50">${cctDisplay}</td><td class="p-2.5 text-gray-600 truncate max-w-[200px] cust-cell">${m.CUSTOMER||'-'}</td></tr>`;
             });
             
-            if(filtered.length === 0) html = '<tr><td colspan="8" class="text-center p-6 text-gray-400 font-medium">Tidak ada data aktif.</td></tr>';
+            if(filtered.length === 0) html = '<tr><td colspan="8" class="text-center p-6 text-gray-400 font-medium">Tidak ada data aktif di kategori ini.</td></tr>';
             
             if (mode === 'SINGLE' && filtered.length > 0) {
                  let m = filtered[0];
@@ -1741,6 +1762,7 @@
             safeSetText('drilldown-title', titleStr);
             safeSetHTML('drilldown-tbody', html);
 
+            // Pasang Header Pencarian Dinamis
             const thead = document.querySelector('#drilldown-modal thead');
             if(thead) {
                 const oldFilterRow = thead.querySelector('.modal-filter-row');
@@ -1881,16 +1903,18 @@
                     closedToday.forEach(m => {
                         let w = wipMap.get(m._uid);
                         let qty = parseFloat(m['QTY'] || 0);
-                        let cct = w && w['PP CCT'] ? parseFloat(w['PP CCT']) : parseFloat(m['TOTAL CCT'] || 0);
+                        let qtyCct = parseFloat(m['CCT'] || m['QTY CCT'] || 0);
+                        let totalCct = w && w['PP CCT'] ? parseFloat(w['PP CCT']) : parseFloat(m['TOTAL CCT'] || 0);
                         logHtml += `
                         <div onclick="openAdvancedDrilldown('SINGLE', '${m._uid}')" class="p-1.5 border border-emerald-100 rounded bg-emerald-50 transition hover:bg-emerald-200 cursor-pointer shadow-sm hover:shadow hover:scale-[1.01]">
                             <div class="flex justify-between items-center w-full text-[9px]">
                                 <span class="font-bold text-gray-800">${m['ASSY'] || '-'} <span class="text-emerald-600 font-normal ml-1">(${m['PERIODE']||'-'} | ${m['WP'] || '-'})</span></span>
                                 <span class="text-emerald-700 font-bold">${m._closedDate || todayStr}</span>
                             </div>
-                            <div class="flex justify-between items-center w-full mt-1 text-[8px] text-gray-500">
-                                <span>QTY: <strong class="text-gray-700">${qty}</strong></span>
-                                <span>CCT: <strong class="text-gray-700">${cct}</strong></span>
+                            <div class="flex justify-between items-center w-full mt-1.5 text-[8px] text-gray-500">
+                                <span class="bg-white/70 px-1.5 py-0.5 rounded border border-gray-100 shadow-sm">QTY: <strong class="text-gray-700">${qty}</strong></span>
+                                <span class="bg-white/70 px-1.5 py-0.5 rounded border border-gray-100 shadow-sm">CCT: <strong class="text-purple-600">${qtyCct}</strong></span>
+                                <span class="bg-white/70 px-1.5 py-0.5 rounded border border-gray-100 shadow-sm">TOTAL: <strong class="text-gray-800">${totalCct}</strong></span>
                             </div>
                         </div>`;
                     });
@@ -1910,16 +1934,18 @@
                         let tColor = isCnd3 ? 'text-red-500' : 'text-amber-500';
                         let w = wipMap.get(m._uid);
                         let qty = parseFloat(m['QTY'] || 0);
-                        let cct = w && w['PP CCT'] ? parseFloat(w['PP CCT']) : parseFloat(m['TOTAL CCT'] || 0);
+                        let qtyCct = parseFloat(m['CCT'] || m['QTY CCT'] || 0);
+                        let totalCct = w && w['PP CCT'] ? parseFloat(w['PP CCT']) : parseFloat(m['TOTAL CCT'] || 0);
                         logHtml += `
                         <div onclick="openAdvancedDrilldown('SINGLE', '${m._uid}')" class="p-1.5 border rounded ${bg} transition hover:opacity-80 cursor-pointer shadow-sm hover:shadow hover:scale-[1.01]">
                             <div class="flex justify-between items-center w-full text-[9px]">
                                 <span class="font-bold text-gray-800">${m['ASSY'] || '-'} <span class="${tColor} font-normal ml-1">(${m['PERIODE']||'-'} | ${m['WP']||'-'})</span></span>
                                 <span class="font-bold font-mono">${m['STWC'] || '-'}</span>
                             </div>
-                            <div class="flex justify-between items-center w-full mt-1 text-[8px] text-gray-500">
-                                <span>QTY: <strong class="text-gray-700">${qty}</strong></span>
-                                <span>CCT: <strong class="text-gray-700">${cct}</strong></span>
+                            <div class="flex justify-between items-center w-full mt-1.5 text-[8px] text-gray-500">
+                                <span class="bg-white/70 px-1.5 py-0.5 rounded border border-gray-100 shadow-sm">QTY: <strong class="text-gray-700">${qty}</strong></span>
+                                <span class="bg-white/70 px-1.5 py-0.5 rounded border border-gray-100 shadow-sm">CCT: <strong class="text-purple-600">${qtyCct}</strong></span>
+                                <span class="bg-white/70 px-1.5 py-0.5 rounded border border-gray-100 shadow-sm">TOTAL: <strong class="text-gray-800">${totalCct}</strong></span>
                             </div>
                         </div>`;
                     });
