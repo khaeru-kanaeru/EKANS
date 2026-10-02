@@ -24,10 +24,6 @@
         .input-stylish { border: 1px solid #e2e8f0; border-radius: 0.375rem; padding: 0.5rem 0.75rem; font-size: 0.875rem; font-weight: 700; color: #1e40af; outline: none; transition: all 0.2s; background-color: #fff; }
         .input-stylish:focus { border-color: #93c5fd; box-shadow: 0 0 0 2px rgba(147, 197, 253, 0.2); }
         .label-stylish { display: block; font-size: 0.65rem; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.25rem; }
-        .tag-container { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px; border: 1px solid #e2e8f0; border-radius: 0.375rem; background: #fff; min-height: 42px;}
-        .tag { background-color: #e0e7ff; color: #4338ca; padding: 2px 8px; border-radius: 9999px; font-size: 0.75rem; display: flex; align-items: center; gap: 4px; font-weight: 600;}
-        .tag button { color: #4f46e5; font-weight: bold; }
-        .tag-input { border: none; outline: none; flex-grow: 1; min-width: 100px; font-size: 0.875rem; padding: 2px; color: #1e3a8a; font-weight: 600;}
         @keyframes blink { 50% { opacity: 0.5; } }
         .blink-urgent { animation: blink 1.5s infinite; }
         #history-panel { transition: transform 0.3s ease-in-out; }
@@ -38,6 +34,11 @@
     </style>
 </head>
 <body class="text-gray-800 h-screen flex flex-col overflow-hidden">
+    <!-- Datalist untuk Problem Marker -->
+    <datalist id="problem-list">
+        <option value="ASSY DEBITNOTE"></option><option value="BARCODE NG"></option><option value="BELUM TERSUPPLY"></option><option value="CUTTING ULANG"></option><option value="HILANG"></option><option value="KESALAHAN DOKUMENT"></option><option value="KURANG MARKER"></option><option value="KURANG SUPPLY"></option><option value="LEBIH SUPPLY"></option><option value="MINUS MARKER"></option><option value="MINUSAN MARKER"></option><option value="MODIF"></option><option value="N/P MEMUDAR"></option><option value="NG"></option><option value="NG (KOTOR)"></option><option value="NG (MARKER PUDAR)"></option><option value="NG, KURANG SUPPLY"></option><option value="NP HILANG/KOTOR"></option><option value="NP PUDAR"></option><option value="PERUBAHAN DOC"></option><option value="PUDAR"></option><option value="RUSAK"></option><option value="SALAH SUPPLY"></option><option value="TERBALIK"></option><option value="TIDAK TER SUPPLY"></option>
+    </datalist>
+
     <!-- Login Screen -->
     <div id="login-page" class="flex-1 flex items-center justify-center bg-[#f4f7fb] z-50 absolute inset-0 overflow-y-auto py-10">
         <div class="max-w-md w-full p-6">
@@ -270,7 +271,7 @@
 
     <div id="modal-select-type-marker" class="hidden fixed inset-0 bg-gray-900 bg-opacity-60 z-[60] flex justify-center items-center backdrop-blur-sm"><div class="bg-white w-full max-w-sm rounded-xl shadow-2xl flex flex-col p-6"><div class="text-center mb-6"><i class="fas fa-layer-group text-4xl text-brand-blue mb-3"></i><h3 class="font-display font-black text-xl text-gray-800">Pilih Jenis Kanban Marker</h3></div><div class="space-y-3"><button onclick="selectKanbanTypeMarker('ALL')" class="w-full bg-blue-50 text-brand-blue border border-blue-200 font-black py-4 rounded-xl flex items-center justify-center gap-3"><i class="fas fa-cubes text-xl"></i> KANBAN ALL</button><button onclick="selectKanbanTypeMarker('IMPP')" class="w-full bg-purple-50 text-purple-700 border border-purple-200 font-black py-4 rounded-xl flex items-center justify-center gap-3"><i class="fas fa-tags text-xl"></i> KANBAN IMPP</button></div><button onclick="closeModal('modal-select-type-marker')" class="mt-6 text-xs font-bold text-gray-400 hover:text-gray-600">Batal</button></div></div>
 
-    <div id="modal-kanban-marker" class="hidden fixed inset-0 bg-gray-900 bg-opacity-40 z-[60] flex justify-center items-center backdrop-blur-sm p-4"><div class="bg-white w-full max-w-5xl rounded-xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden"><div class="px-6 py-4 flex justify-between items-center border-b"><div class="flex items-center gap-3 text-brand-teal"><i class="fas fa-clipboard-check text-xl"></i><div><h3 class="font-display font-black text-lg leading-none">Buat Request Marker</h3><span id="form-type-badge-marker" class="text-[9px] font-bold px-2 py-0.5 bg-gray-100 rounded text-gray-600 uppercase border tracking-wider"></span></div></div><button onclick="closeModal('modal-kanban-marker')" class="text-gray-400 hover:text-red-500"><i class="fas fa-times text-xl"></i></button></div><div class="flex flex-col md:flex-row flex-1 overflow-hidden bg-white"><div class="w-full md:w-5/12 p-6 border-r flex flex-col bg-gray-50/30 overflow-y-auto"><div id="form-inputs-container-marker" class="space-y-4 mb-6 h-[400px] overflow-y-auto pr-2"></div><div class="mt-auto pt-4 border-t border-gray-200"><button onclick="addAssyToTempMarker()" class="w-full bg-blue-50 text-blue-600 border border-blue-200 py-3 rounded-lg text-xs font-bold flex items-center justify-center gap-2"><i class="fas fa-arrow-right"></i> Tambahkan ke Daftar (Enter)</button></div></div><div class="w-full md:w-7/12 p-6 flex flex-col bg-white overflow-hidden"><div class="flex justify-between mb-4 border-b pb-2"><span class="text-xs font-black text-brand-teal uppercase"><i class="fas fa-list-ol mr-1"></i> Daftar Request (<span id="temp-count-marker">0</span>)</span><div class="flex gap-2"><button onclick="exportJSON_Marker()" class="text-[10px] font-bold bg-indigo-50 text-indigo-600 border border-indigo-200 px-2.5 py-1 rounded"><i class="fas fa-file-export"></i> Export</button><button onclick="document.getElementById('import-file-marker').click()" class="text-[10px] font-bold bg-orange-50 text-orange-600 border border-orange-200 px-2.5 py-1 rounded"><i class="fas fa-file-import"></i> Import</button><input type="file" id="import-file-marker" class="hidden" accept=".json" onchange="importJSON_Marker(event)"></div></div><div class="flex-1 overflow-y-auto pr-2 bg-gray-50/50 p-2 rounded border" id="temp-assy-list-marker"></div><div class="pt-4 border-t mt-4 flex justify-end gap-3 items-center bg-white"><button onclick="closeModal('modal-kanban-marker'); openModal('modal-select-type-marker')" class="text-xs font-bold text-gray-400">Kembali</button><button onclick="checkDuplicatesBeforeConfirm()" class="bg-brand-teal text-white text-xs font-bold px-6 py-2.5 rounded flex items-center gap-2"><i class="fas fa-flag-checkered"></i> Lanjutkan</button></div></div></div></div></div>
+    <div id="modal-kanban-marker" class="hidden fixed inset-0 bg-gray-900 bg-opacity-40 z-[60] flex justify-center items-center backdrop-blur-sm p-4"><div class="bg-white w-full max-w-5xl rounded-xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden"><div class="px-6 py-4 flex justify-between items-center border-b"><div class="flex items-center gap-3 text-brand-teal"><i class="fas fa-clipboard-check text-xl"></i><div><h3 class="font-display font-black text-lg leading-none">Buat Request Marker</h3><span id="form-type-badge-marker" class="text-[9px] font-bold px-2 py-0.5 bg-gray-100 rounded text-gray-600 uppercase border tracking-wider"></span></div></div><button onclick="closeModal('modal-kanban-marker')" class="text-gray-400 hover:text-red-500"><i class="fas fa-times text-xl"></i></button></div><div class="flex flex-col md:flex-row flex-1 overflow-hidden bg-white"><div class="w-full md:w-5/12 p-6 border-r flex flex-col bg-gray-50/30 overflow-y-auto"><div id="form-inputs-container-marker" class="space-y-4 mb-6 h-[400px] overflow-y-auto pr-2"></div><div id="modal-left-action-container" class="mt-auto pt-4 border-t border-gray-200"><button onclick="addAssyToTempMarker()" class="w-full bg-blue-50 text-blue-600 border border-blue-200 py-3 rounded-lg text-xs font-bold flex items-center justify-center gap-2"><i class="fas fa-arrow-right"></i> Tambahkan ke Daftar (Enter)</button></div></div><div class="w-full md:w-7/12 p-6 flex flex-col bg-white overflow-hidden"><div class="flex justify-between mb-4 border-b pb-2"><span class="text-xs font-black text-brand-teal uppercase"><i class="fas fa-list-ol mr-1"></i> Daftar Request (<span id="temp-count-marker">0</span>)</span><div class="flex gap-2"><button onclick="exportJSON_Marker()" class="text-[10px] font-bold bg-indigo-50 text-indigo-600 border border-indigo-200 px-2.5 py-1 rounded"><i class="fas fa-file-export"></i> Export</button><button onclick="document.getElementById('import-file-marker').click()" class="text-[10px] font-bold bg-orange-50 text-orange-600 border border-orange-200 px-2.5 py-1 rounded"><i class="fas fa-file-import"></i> Import</button><input type="file" id="import-file-marker" class="hidden" accept=".json" onchange="importJSON_Marker(event)"></div></div><div class="flex-1 overflow-y-auto pr-2 bg-gray-50/50 p-2 rounded border" id="temp-assy-list-marker"></div><div class="pt-4 border-t mt-4 flex justify-end gap-3 items-center bg-white"><button onclick="closeModal('modal-kanban-marker'); openModal('modal-select-type-marker')" class="text-xs font-bold text-gray-400">Kembali</button><button onclick="checkDuplicatesBeforeConfirm()" class="bg-brand-teal text-white text-xs font-bold px-6 py-2.5 rounded flex items-center gap-2"><i class="fas fa-flag-checkered"></i> Lanjutkan</button></div></div></div></div></div>
 
     <div id="modal-duplicate-warning" class="hidden fixed inset-0 bg-gray-900 bg-opacity-60 z-[70] flex justify-center items-center backdrop-blur-sm p-4">
         <div class="bg-white w-full max-w-2xl rounded-xl shadow-2xl flex flex-col">
@@ -336,40 +337,39 @@
         const dbFs = firebase.firestore();
 
         let currentUser = null; let db = { requests: [] };
-        let tempAssyListMarker = []; let currentKanbanTypeMarker = 'ALL'; let imppMarkersData = [];
+        let tempAssyListMarker = []; let currentKanbanTypeMarker = 'ALL';
         let timeInterval = null; let clockInterval = null; let isHistoryOpen = false; let cancelTargetId = null;
         let currentStatTab = 'ALL';
-        let isLeaderGridView = false; // State untuk Toggle Grid/List
+        let isLeaderGridView = false; 
         const STATUS_WAITING = 'WAITING'; const STATUS_PROCESSING = 'PROCESSING'; const STATUS_READY = 'READY'; const STATUS_PICKED_UP = 'PICKED_UP'; const STATUS_FINISHED = 'FINISHED';
 
         let whPresenceInterval = null;
         let cachedHistoryBuckets = {}; 
         let loadedHistoryData = []; 
 
-        let audioCtx = null;
+        // Inisialisasi file MP3 dari repositori / cloud storage
+        const announcerAudio = new Audio('announcer.mp3');
         
+        // POKA-YOKE: Unlocking audio saat ada interaksi user pertama kali (klik login) agar tidak diblokir browser
         function initAudio() {
-            if (!audioCtx) {
-                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            }
-            if (audioCtx.state === 'suspended') {
-                audioCtx.resume();
+            announcerAudio.load();
+            announcerAudio.volume = 0; // Mute sementara untuk bypass kebijakan autoplay
+            
+            let playPromise = announcerAudio.play();
+            if (playPromise !== undefined) {
+                playPromise.then(() => {
+                    announcerAudio.pause();
+                    announcerAudio.currentTime = 0;
+                    announcerAudio.volume = 1; // Kembalikan ke volume normal untuk notifikasi sesungguhnya
+                }).catch(e => console.warn("Audio unlock pending interaction", e));
             }
         }
 
         function playBeep(type = 'notification') {
-            if (!audioCtx) return;
-            if (audioCtx.state === 'suspended') audioCtx.resume();
-            const oscillator = audioCtx.createOscillator(); const gainNode = audioCtx.createGain();
-            oscillator.connect(gainNode); gainNode.connect(audioCtx.destination); const t = audioCtx.currentTime;
-            
-            if (type === 'urgent') { oscillator.type = 'sine'; oscillator.frequency.setValueAtTime(987.77, t); oscillator.frequency.setValueAtTime(1318.51, t + 0.15); gainNode.gain.setValueAtTime(0, t); gainNode.gain.linearRampToValueAtTime(1.0, t + 0.05); gainNode.gain.exponentialRampToValueAtTime(0.1, t + 0.15); gainNode.gain.linearRampToValueAtTime(1.0, t + 0.2); gainNode.gain.exponentialRampToValueAtTime(0.01, t + 0.5); oscillator.start(t); oscillator.stop(t + 0.5); } 
-            else if (type === 'ready') { oscillator.type = 'sine'; oscillator.frequency.setValueAtTime(523.25, t); oscillator.frequency.setValueAtTime(659.25, t + 0.1); oscillator.frequency.setValueAtTime(783.99, t + 0.2); oscillator.frequency.setValueAtTime(1046.50, t + 0.3); gainNode.gain.setValueAtTime(0, t); gainNode.gain.linearRampToValueAtTime(0.8, t + 0.05); gainNode.gain.exponentialRampToValueAtTime(0.01, t + 0.6); oscillator.start(t); oscillator.stop(t + 0.6); } 
-            else if (type === 'message') { oscillator.type = 'sine'; oscillator.frequency.setValueAtTime(800, t); oscillator.frequency.exponentialRampToValueAtTime(1200, t + 0.05); gainNode.gain.setValueAtTime(0, t); gainNode.gain.linearRampToValueAtTime(0.7, t + 0.01); gainNode.gain.exponentialRampToValueAtTime(0.01, t + 0.1); oscillator.start(t); oscillator.stop(t + 0.1); } 
-            else if (type === 'pickup') { oscillator.type = 'sine'; oscillator.frequency.setValueAtTime(880, t); oscillator.frequency.setValueAtTime(440, t + 0.1); gainNode.gain.setValueAtTime(0, t); gainNode.gain.linearRampToValueAtTime(0.8, t + 0.02); gainNode.gain.exponentialRampToValueAtTime(0.01, t + 0.2); oscillator.start(t); oscillator.stop(t + 0.2); } 
-            else if (type === 'accepted') { oscillator.type = 'sine'; oscillator.frequency.setValueAtTime(440, t); oscillator.frequency.setValueAtTime(880, t + 0.1); gainNode.gain.setValueAtTime(0, t); gainNode.gain.linearRampToValueAtTime(0.8, t + 0.02); gainNode.gain.exponentialRampToValueAtTime(0.01, t + 0.2); oscillator.start(t); oscillator.stop(t + 0.2); } 
-            else { oscillator.type = 'sine'; oscillator.frequency.setValueAtTime(783.99, t); oscillator.frequency.setValueAtTime(1046.50, t + 0.1); gainNode.gain.setValueAtTime(0, t); gainNode.gain.linearRampToValueAtTime(0.8, t + 0.03); gainNode.gain.exponentialRampToValueAtTime(0.2, t + 0.1); gainNode.gain.linearRampToValueAtTime(0.8, t + 0.13); gainNode.gain.exponentialRampToValueAtTime(0.01, t + 0.4); oscillator.start(t); oscillator.stop(t + 0.4); }
+            announcerAudio.currentTime = 0; // Kembalikan durasi ke awal setiap kali dipanggil
+            announcerAudio.play().catch(e => console.warn("Audio play prevented:", e));
         }
+
         function requestNotificationPermission() { if ("Notification" in window && Notification.permission !== "granted" && Notification.permission !== "denied") { Notification.requestPermission(); } }
         function triggerDesktopNotification(title, body) { if ("Notification" in window && Notification.permission === "granted") { new Notification(title, { body: body, icon: "https://cdn-icons-png.flaticon.com/512/1034/1034131.png" }); } }
 
@@ -423,16 +423,12 @@
             const savedUser = sessionStorage.getItem('eks_unified_user'); 
             if (savedUser) { 
                 currentUser = JSON.parse(savedUser); 
-                
-                // Ambil preferensi view sebelumnya (bila ada)
                 const savedView = localStorage.getItem('eks_leader_view');
                 if(savedView === 'grid') isLeaderGridView = true;
-
                 showApp(); 
             } 
         }
 
-        // Warehouse Presence Logic
         function updateWarehousePresence() {
             if (currentUser && currentUser.role === 'warehouse') {
                 firebase.database().ref('wh_presence_marker').set(Date.now());
@@ -503,7 +499,6 @@
                 document.getElementById('btn-stats').classList.add('hidden');
                 document.getElementById('filter-line').value = currentUser.line; 
 
-                // Tampilkan icon grid toggle sesuai state
                 document.getElementById('btn-toggle-view').classList.remove('hidden');
                 document.getElementById('btn-toggle-view').innerHTML = isLeaderGridView ? '<i class="fas fa-list text-brand-teal"></i>' : '<i class="fas fa-th-large text-brand-teal"></i>';
                 
@@ -518,7 +513,7 @@
             } else { 
                 document.getElementById('dashboard-leader').classList.add('hidden'); document.getElementById('dashboard-warehouse').classList.remove('hidden'); document.getElementById('btn-new-kanban').classList.add('hidden'); 
                 document.getElementById('btn-stats').classList.remove('hidden');
-                document.getElementById('btn-toggle-view').classList.add('hidden'); // Sembunyikan grid toggle untuk warehouse
+                document.getElementById('btn-toggle-view').classList.add('hidden');
                 document.getElementById('wh-presence-container').classList.add('hidden'); 
                 
                 whPresenceInterval = setInterval(updateWarehousePresence, 5000);
@@ -571,23 +566,124 @@
         function routeNewKanban() { openModal('modal-select-type-marker'); }
 
         function selectKanbanTypeMarker(type) { currentKanbanTypeMarker = type; document.getElementById('form-type-badge-marker').textContent = type; closeModal('modal-select-type-marker'); tempAssyListMarker = []; renderTempListMarker(); if(type === 'ALL') renderFormInputsMarkerALL(); else renderFormInputsMarkerIMPP(); openModal('modal-kanban-marker'); setTimeout(() => { document.getElementById('form-assy-m').focus(); }, 100); }
-        function setupEnterNavigationMarker() { const inputs = Array.from(document.getElementById('form-inputs-container-marker').querySelectorAll('input, select')); inputs.forEach((input, index) => { input.onkeydown = function(e) { if (e.key === 'Enter') { e.preventDefault(); if (this.id === 'form-marker-input-m') { if (this.value.trim() !== '') { imppMarkersData.push(this.value.trim()); renderMarkersTags(); this.value = ''; return; } } const nextInput = inputs[index + 1]; if (nextInput) { nextInput.focus(); } else { addAssyToTempMarker(); } } }; }); }
         
         function renderFormInputsMarkerALL() { 
-            document.getElementById('form-inputs-container-marker').innerHTML = `<div><label class="label-stylish">NO ASSY</label><input type="text" id="form-assy-m" class="input-stylish w-full uppercase" placeholder="Scan/Ketik Assy" oninput="this.value = this.value.toUpperCase()"></div><div class="flex gap-3 mt-3"><div class="w-1/3"><label class="label-stylish">W/P</label><input type="text" id="form-wp-m" class="input-stylish w-full uppercase" placeholder="07/04" oninput="this.value = this.value.toUpperCase()"></div><div class="w-1/3"><label class="label-stylish">QTY</label><input type="number" id="form-qty-m" class="input-stylish w-full" placeholder="0"></div><div class="w-1/3"><label class="label-stylish text-purple-600">LOT <span class="text-[8px] text-gray-400 font-normal normal-case">(Opsional)</span></label><input type="text" id="form-lot-m" class="input-stylish w-full text-purple-700 border-purple-200 bg-purple-50 uppercase" placeholder="Cth: A" oninput="this.value = this.value.toUpperCase()"></div><div class="w-1/3"><label class="label-stylish">TIPE MARKER</label><select id="form-type-marker-m" class="input-stylish w-full"><option value="Wire">Wire</option><option value="Tube">Tube</option><option value="Joint">Joint</option></select></div></div><div class="mt-3"><label class="label-stylish">LINE OUTPUT</label><select id="form-line-m" class="input-stylish w-full"><option value="Line Crimping">Line Crimping</option><option value="Line SMV">Line SMV</option><option value="Line Proto">Line Proto</option><option value="Line HA">Line HA</option></select></div><div class="flex gap-3 mt-3"><div class="flex-1"><label class="label-stylish">NAMA PIC</label><input type="text" id="form-pic-m" class="input-stylish w-full uppercase" placeholder="Inisial"></div><div class="flex-[2]"><label class="label-stylish">KETERANGAN TAMBAHAN (OPSIONAL)</label><input type="text" id="form-note-m" class="input-stylish w-full" placeholder="Info tambahan..."></div></div>`; 
+            document.getElementById('form-inputs-container-marker').innerHTML = `
+                <div><label class="label-stylish">NO ASSY</label><input type="text" id="form-assy-m" class="input-stylish w-full uppercase" placeholder="Scan/Ketik Assy" oninput="this.value = this.value.toUpperCase()"></div>
+                <div class="flex gap-3 mt-3">
+                    <div class="w-1/3"><label class="label-stylish">W/P</label><input type="text" id="form-wp-m" class="input-stylish w-full uppercase" placeholder="07/04" oninput="this.value = this.value.toUpperCase()"></div>
+                    <div class="w-1/3"><label class="label-stylish">QTY</label><input type="number" min="1" id="form-qty-m" class="input-stylish w-full" placeholder="0"></div>
+                    <div class="w-1/3"><label class="label-stylish text-purple-600">LOT <span class="text-[8px] text-gray-400 font-normal normal-case">(Opsional)</span></label><input type="text" id="form-lot-m" class="input-stylish w-full text-purple-700 border-purple-200 bg-purple-50 uppercase" placeholder="Cth: A" oninput="this.value = this.value.toUpperCase()"></div>
+                    <div class="w-1/3"><label class="label-stylish">TIPE MARKER</label><select id="form-type-marker-m" class="input-stylish w-full"><option value="Wire">Wire</option><option value="Tube">Tube</option><option value="Joint">Joint</option></select></div>
+                </div>
+                <div class="mt-3"><label class="label-stylish">LINE OUTPUT</label><select id="form-line-m" class="input-stylish w-full"><option value="Line Crimping">Line Crimping</option><option value="Line SMV">Line SMV</option><option value="Line Proto">Line Proto</option><option value="Line HA">Line HA</option></select></div>
+                <div class="flex gap-3 mt-3">
+                    <div class="flex-1"><label class="label-stylish">NAMA PIC</label><input type="text" id="form-pic-m" class="input-stylish w-full uppercase" placeholder="Inisial"></div>
+                    <div class="flex-[2]"><label class="label-stylish">KETERANGAN TAMBAHAN (OPSIONAL)</label><input type="text" id="form-note-m" class="input-stylish w-full" placeholder="Info tambahan..."></div>
+                </div>
+            `; 
+            document.getElementById('modal-left-action-container').classList.remove('hidden');
             if(currentUser.line && currentUser.line !== 'ALL') { document.getElementById('form-line-m').value = currentUser.line; }
-            setTimeout(setupEnterNavigationMarker, 50); 
+            
+            setTimeout(() => {
+                const inputs = Array.from(document.getElementById('form-inputs-container-marker').querySelectorAll('input, select'));
+                inputs.forEach((input, index) => {
+                    input.onkeydown = function(e) {
+                        if (e.key === 'Enter') {
+                            e.preventDefault();
+                            const nextInput = inputs[index + 1];
+                            if (nextInput) nextInput.focus();
+                            else addAssyToTempMarker();
+                        }
+                    };
+                });
+            }, 50); 
         }
         
         function renderFormInputsMarkerIMPP() { 
-            imppMarkersData = []; 
-            document.getElementById('form-inputs-container-marker').innerHTML = `<div><label class="label-stylish">NO ASSY</label><input type="text" id="form-assy-m" class="input-stylish w-full uppercase" placeholder="Scan/Ketik Assy" oninput="this.value = this.value.toUpperCase()"></div><div class="flex gap-3 mt-3"><div class="w-1/3"><label class="label-stylish">W/P</label><input type="text" id="form-wp-m" class="input-stylish w-full uppercase" placeholder="07/04" oninput="this.value = this.value.toUpperCase()"></div><div class="w-1/3"><label class="label-stylish">QTY</label><input type="number" id="form-qty-m" class="input-stylish w-full" placeholder="0"></div><div class="w-1/3"><label class="label-stylish text-purple-600">LOT</label><input type="text" id="form-lot-m" class="input-stylish w-full text-purple-700 border-purple-200 bg-purple-50 uppercase" placeholder="Cth: A" oninput="this.value = this.value.toUpperCase()"></div><div class="w-1/3"><label class="label-stylish">TIPE MARKER</label><select id="form-type-marker-m" class="input-stylish w-full"><option value="Wire">Wire</option><option value="Tube">Tube</option><option value="Joint">Joint</option></select></div></div><div class="mt-3"><label class="label-stylish">MARKER (TEKAN ENTER UNTUK INPUT, KOSONG UNTUK LANJUT)</label><div class="tag-container input-stylish w-full p-1 cursor-text" id="marker-tags-container" onclick="document.getElementById('form-marker-input-m').focus()"><input type="text" id="form-marker-input-m" class="tag-input" placeholder="Ketik & Enter..."></div></div><div class="flex gap-3 mt-3"><div class="flex-1"><label class="label-stylish">PROBLEM</label><input type="text" id="form-problem-m" class="input-stylish w-full" placeholder="Keterangan problem..."></div><div class="flex-1"><label class="label-stylish">LINE OUTPUT</label><select id="form-line-m" class="input-stylish w-full"><option value="Line Crimping">Line Crimping</option><option value="Line SMV">Line SMV</option><option value="Line Proto">Line Proto</option><option value="Line HA">Line HA</option></select></div></div><div class="flex gap-3 mt-3"><div class="flex-1"><label class="label-stylish">NAMA PIC</label><input type="text" id="form-pic-m" class="input-stylish w-full uppercase" placeholder="Inisial"></div><div class="flex-[2]"><label class="label-stylish">KETERANGAN</label><input type="text" id="form-note-m" class="input-stylish w-full" placeholder="Info tambahan..."></div></div>`; 
+            document.getElementById('form-inputs-container-marker').innerHTML = `
+                <div><label class="label-stylish">NO ASSY</label><input type="text" id="form-assy-m" class="input-stylish w-full uppercase font-black text-brand-blue" placeholder="Scan/Ketik Assy" oninput="this.value = this.value.toUpperCase()"></div>
+                <div class="flex gap-3 mt-3">
+                    <div class="w-1/2"><label class="label-stylish">W/P</label><input type="text" id="form-wp-m" class="input-stylish w-full uppercase" placeholder="07/04" oninput="this.value = this.value.toUpperCase()"></div>
+                    <div class="w-1/2"><label class="label-stylish text-purple-600">LOT <span class="text-[8px] text-gray-400 font-normal normal-case">(Opsional)</span></label><input type="text" id="form-lot-m" class="input-stylish w-full text-purple-700 border-purple-200 bg-purple-50 uppercase" placeholder="Cth: A" oninput="this.value = this.value.toUpperCase()"></div>
+                </div>
+                <div class="flex gap-3 mt-3">
+                    <div class="flex-1"><label class="label-stylish">LINE OUTPUT</label><select id="form-line-m" class="input-stylish w-full"><option value="Line Crimping">Line Crimping</option><option value="Line SMV">Line SMV</option><option value="Line Proto">Line Proto</option><option value="Line HA">Line HA</option></select></div>
+                    <div class="flex-1"><label class="label-stylish">NAMA PIC</label><input type="text" id="form-pic-m" class="input-stylish w-full uppercase" placeholder="Inisial"></div>
+                </div>
+                <div class="mt-3"><label class="label-stylish">KETERANGAN TAMBAHAN (OPSIONAL)</label><input type="text" id="form-note-m" class="input-stylish w-full" placeholder="Info tambahan..."></div>
+                
+                <div class="mt-4 pt-4 border-t border-gray-200">
+                    <label class="label-stylish text-red-500"><i class="fas fa-exclamation-triangle"></i> DEFAULT PROBLEM (OTOMATIS TERISI PADA MARKER)</label>
+                    <input type="text" id="form-problem-m" list="problem-list" class="input-stylish w-full" placeholder="Pilih atau ketik problem (bisa diubah nanti)...">
+                </div>
+                
+                <div class="mt-4 bg-indigo-50 border border-indigo-200 p-3 rounded-lg shadow-sm">
+                    <label class="label-stylish text-brand-blue mb-2"><i class="fas fa-keyboard"></i> KETIK MARKER LALU TEKAN ENTER</label>
+                    <div class="flex gap-2">
+                        <input type="text" id="form-marker-input-m" class="input-stylish flex-1 font-mono text-indigo-700" placeholder="Ketik teks marker...">
+                        <button type="button" onclick="handleIMPMarkerEnter()" class="bg-brand-blue text-white px-4 rounded-lg font-bold shadow hover:bg-blue-800"><i class="fas fa-level-down-alt transform rotate-90"></i></button>
+                    </div>
+                </div>
+            `; 
+            
+            // Sembunyikan tombol Submit global untuk IMPP (karena enter marker langsung submit ke cart)
+            document.getElementById('modal-left-action-container').classList.add('hidden');
+
             if(currentUser.line && currentUser.line !== 'ALL') { document.getElementById('form-line-m').value = currentUser.line; }
-            setTimeout(setupEnterNavigationMarker, 50); 
+            
+            setTimeout(() => {
+                document.getElementById('form-marker-input-m').addEventListener('keypress', function(e) {
+                    if (e.key === 'Enter') { e.preventDefault(); handleIMPMarkerEnter(); }
+                });
+            }, 100); 
         }
 
-        function renderMarkersTags() { const container = document.getElementById('marker-tags-container'); Array.from(container.querySelectorAll('.tag')).forEach(el => el.remove()); const inputEl = document.getElementById('form-marker-input-m'); imppMarkersData.forEach((m, idx) => { const tag = document.createElement('div'); tag.className = 'tag'; tag.innerHTML = `${m} <button type="button" onclick="removeMarkerTag(${idx}, event)">&times;</button>`; container.insertBefore(tag, inputEl); }); }
-        function removeMarkerTag(idx, e) { e.stopPropagation(); imppMarkersData.splice(idx, 1); renderMarkersTags(); }
+        function handleIMPMarkerEnter() {
+            const assy = document.getElementById('form-assy-m').value.trim().toUpperCase();
+            if(!assy) { showMessage("Assy No wajib diisi sebelum input marker!"); return; }
+            
+            const markerInput = document.getElementById('form-marker-input-m');
+            const markerText = markerInput.value.trim().toUpperCase();
+            if(!markerText) return;
+
+            const wp = document.getElementById('form-wp-m').value.trim().toUpperCase();
+            const lot = document.getElementById('form-lot-m').value.trim().toUpperCase();
+            const line = document.getElementById('form-line-m').value;
+            const pic = document.getElementById('form-pic-m').value.trim().toUpperCase();
+            const note = document.getElementById('form-note-m').value.trim();
+            const defProblem = document.getElementById('form-problem-m').value.trim();
+
+            // POKA-YOKE: Cari block Assy yang identik. Jika beda, buat block Assy baru di list kanan.
+            let existingIdx = tempAssyListMarker.findIndex(item => 
+                item.type === 'IMPP' &&
+                item.assy === assy &&
+                item.wp === wp &&
+                item.lot === lot &&
+                item.line === line &&
+                item.pic === pic &&
+                item.note === note
+            );
+
+            if(existingIdx === -1) {
+                tempAssyListMarker.push({
+                    assy, wp, lot, line, note, pic, type: 'IMPP', urgent: false,
+                    markers: []
+                });
+                existingIdx = tempAssyListMarker.length - 1;
+            }
+
+            tempAssyListMarker[existingIdx].markers.push({
+                text: markerText,
+                qty: 0,
+                typeMarker: 'Wire',
+                problem: defProblem
+            });
+
+            markerInput.value = '';
+            renderTempListMarker();
+            markerInput.focus();
+        }
         
         function addAssyToTempMarker() { 
             const assy = document.getElementById('form-assy-m').value.trim().toUpperCase(); 
@@ -607,27 +703,106 @@
                 urgent: false 
             }; 
             
-            if (currentKanbanTypeMarker === 'IMPP') { 
-                if(imppMarkersData.length === 0) { showMessage("Minimal 1 Marker!"); return; } 
-                item.markers = [...imppMarkersData]; 
-                item.problem = document.getElementById('form-problem-m').value; 
-            } 
             tempAssyListMarker.push(item); renderTempListMarker(); 
             document.getElementById('form-assy-m').value = ''; 
             document.getElementById('form-wp-m').value = ''; 
             document.getElementById('form-qty-m').value = ''; 
             document.getElementById('form-note-m').value = ''; 
-            if(currentKanbanTypeMarker === 'IMPP') { imppMarkersData = []; renderMarkersTags(); document.getElementById('form-problem-m').value = ''; } 
             document.getElementById('form-assy-m').focus(); 
         }
 
+        window.updateMarkerData = function(assyIdx, markerIdx, field, value) {
+            tempAssyListMarker[assyIdx].markers[markerIdx][field] = value;
+        }
+
+        window.removeMarkerFromIMPP = function(assyIdx, markerIdx) {
+            tempAssyListMarker[assyIdx].markers.splice(markerIdx, 1);
+            if(tempAssyListMarker[assyIdx].markers.length === 0) {
+                tempAssyListMarker.splice(assyIdx, 1);
+            }
+            renderTempListMarker();
+        }
+
         function toggleTempUrgentMarker(idx) { tempAssyListMarker[idx].urgent = !tempAssyListMarker[idx].urgent; renderTempListMarker(); }
-        function renderTempListMarker() { const listDiv = document.getElementById('temp-assy-list-marker'); document.getElementById('temp-count-marker').textContent = tempAssyListMarker.length; if (tempAssyListMarker.length === 0) { listDiv.innerHTML = `<div class="h-full flex flex-col items-center justify-center text-gray-300 py-10"><i class="fas fa-box-open text-4xl mb-2"></i><p class="text-xs font-bold uppercase tracking-wide">Belum ada unit ditambahkan</p></div>`; return; } listDiv.innerHTML = tempAssyListMarker.map((item, idx) => `<div class="flex items-center justify-between bg-white border border-gray-100 p-2.5 rounded-lg shadow-sm mb-2"><div class="flex items-start gap-2.5"><div class="bg-blue-50 text-brand-blue font-black px-2 py-1 rounded text-[10px] mt-0.5 w-6 text-center">${idx+1}</div><div><div class="flex items-center gap-1.5 mb-1"><span class="font-display font-black text-sm text-gray-800">${item.assy}</span><span class="bg-gray-800 text-white px-1.5 py-0.5 rounded text-[8px] font-black uppercase shadow-sm">WP: ${item.wp}</span><span class="bg-blue-600 text-white px-1.5 py-0.5 rounded text-[8px] font-black shadow-sm">QTY: ${item.qty}</span>${item.lot ? `<span class="bg-purple-600 text-white px-1.5 py-0.5 rounded text-[8px] font-black shadow-sm">${item.lot}</span>` : ''}</div><div class="flex flex-wrap gap-1"><span class="text-[8px] font-bold bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded uppercase border">${item.line}</span><span class="text-[8px] font-bold bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded uppercase border border-indigo-200">${item.typeMarker}</span>${item.type === 'IMPP' ? `<span class="text-[8px] font-bold text-gray-500 px-1.5 py-0.5 rounded border bg-gray-50">(${item.markers.length} Items)</span>` : ''}</div></div></div><div class="flex items-center gap-3"><label class="flex items-center cursor-pointer group"><div class="relative flex items-center"><input type="checkbox" class="sr-only toggle-switch-input" onchange="toggleTempUrgentMarker(${idx})" ${item.urgent ? 'checked' : ''}><div class="w-8 h-4 rounded-full transition-colors toggle-switch-bg ${item.urgent ? 'bg-red-400' : 'bg-gray-300'}"><div class="toggle-switch-dot absolute left-0.5 top-0.5 bg-white w-3 h-3 rounded-full transition-transform duration-300 ${item.urgent ? 'translate-x-4' : ''}"></div></div></div><span class="ml-1.5 text-[9px] font-bold uppercase w-12 ${item.urgent ? 'text-red-500' : 'text-gray-400'}">${item.urgent ? 'URGENT' : 'REGULAR'}</span></label><button onclick="tempAssyListMarker.splice(${idx}, 1); renderTempListMarker()" class="text-red-400 hover:text-red-600 hover:bg-red-50 p-1.5 rounded"><i class="fas fa-trash text-xs"></i></button></div></div>`).join(''); }
+        
+        function renderTempListMarker() { 
+            const listDiv = document.getElementById('temp-assy-list-marker'); 
+            document.getElementById('temp-count-marker').textContent = tempAssyListMarker.length; 
+            
+            if (tempAssyListMarker.length === 0) { 
+                listDiv.innerHTML = `<div class="h-full flex flex-col items-center justify-center text-gray-300 py-10"><i class="fas fa-box-open text-4xl mb-2"></i><p class="text-xs font-bold uppercase tracking-wide">Belum ada unit ditambahkan</p></div>`; 
+                return; 
+            } 
+            
+            listDiv.innerHTML = tempAssyListMarker.map((item, idx) => {
+                if(item.type === 'ALL') {
+                    return `
+                    <div class="flex items-center justify-between bg-white border border-gray-100 p-2.5 rounded-lg shadow-sm mb-2">
+                        <div class="flex items-start gap-2.5">
+                            <div class="bg-blue-50 text-brand-blue font-black px-2 py-1 rounded text-[10px] mt-0.5 w-6 text-center">${idx+1}</div>
+                            <div>
+                                <div class="flex items-center gap-1.5 mb-1"><span class="font-display font-black text-sm text-gray-800">${item.assy}</span><span class="bg-gray-800 text-white px-1.5 py-0.5 rounded text-[8px] font-black uppercase shadow-sm">WP: ${item.wp}</span><span class="bg-blue-600 text-white px-1.5 py-0.5 rounded text-[8px] font-black shadow-sm">QTY: ${item.qty}</span>${item.lot ? `<span class="bg-purple-600 text-white px-1.5 py-0.5 rounded text-[8px] font-black shadow-sm">${item.lot}</span>` : ''}</div>
+                                <div class="flex flex-wrap gap-1"><span class="text-[8px] font-bold bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded uppercase border">${item.line}</span><span class="text-[8px] font-bold bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded uppercase border border-indigo-200">${item.typeMarker}</span></div>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-3">
+                            <label class="flex items-center cursor-pointer group"><div class="relative flex items-center"><input type="checkbox" class="sr-only toggle-switch-input" onchange="toggleTempUrgentMarker(${idx})" ${item.urgent ? 'checked' : ''}><div class="w-8 h-4 rounded-full transition-colors toggle-switch-bg ${item.urgent ? 'bg-red-400' : 'bg-gray-300'}"><div class="toggle-switch-dot absolute left-0.5 top-0.5 bg-white w-3 h-3 rounded-full transition-transform duration-300 ${item.urgent ? 'translate-x-4' : ''}"></div></div></div><span class="ml-1.5 text-[9px] font-bold uppercase w-12 ${item.urgent ? 'text-red-500' : 'text-gray-400'}">${item.urgent ? 'URGENT' : 'REGULAR'}</span></label>
+                            <button onclick="tempAssyListMarker.splice(${idx}, 1); renderTempListMarker()" class="text-red-400 hover:text-red-600 hover:bg-red-50 p-1.5 rounded"><i class="fas fa-trash text-xs"></i></button>
+                        </div>
+                    </div>`;
+                } else {
+                    return `
+                    <div class="bg-white border border-indigo-100 rounded-lg shadow-sm mb-3 overflow-hidden">
+                        <div class="bg-indigo-50/50 p-2 flex justify-between items-center border-b border-indigo-100">
+                            <div class="flex items-center gap-2">
+                                <div class="bg-indigo-100 text-indigo-800 font-black px-2 py-1 rounded text-[10px] shrink-0 text-center w-6">${idx+1}</div>
+                                <div>
+                                    <div class="font-display font-black text-sm text-brand-blue leading-none mb-1">${item.assy}</div>
+                                    <div class="text-[9px] text-gray-500 font-bold">WP: <span class="text-gray-700">${item.wp||'-'}</span> | LOT: <span class="text-purple-600">${item.lot||'-'}</span> | <span class="uppercase">${item.line}</span></div>
+                                </div>
+                            </div>
+                            <div class="flex items-center gap-3">
+                                <label class="flex items-center cursor-pointer group"><div class="relative flex items-center"><input type="checkbox" class="sr-only toggle-switch-input" onchange="toggleTempUrgentMarker(${idx})" ${item.urgent ? 'checked' : ''}><div class="w-8 h-4 rounded-full transition-colors toggle-switch-bg ${item.urgent ? 'bg-red-400' : 'bg-gray-300'}"><div class="toggle-switch-dot absolute left-0.5 top-0.5 bg-white w-3 h-3 rounded-full transition-transform duration-300 ${item.urgent ? 'translate-x-4' : ''}"></div></div></div><span class="ml-1.5 text-[9px] font-bold uppercase w-12 ${item.urgent ? 'text-red-500' : 'text-gray-400'}">${item.urgent ? 'URGENT' : 'REGULAR'}</span></label>
+                                <button onclick="tempAssyListMarker.splice(${idx}, 1); renderTempListMarker()" class="text-red-400 hover:text-red-600 p-1 rounded"><i class="fas fa-trash text-sm"></i></button>
+                            </div>
+                        </div>
+                        <div class="p-2 space-y-1.5 bg-gray-50/30 max-h-48 overflow-y-auto">
+                            ${item.markers.map((m, mIdx) => `
+                                <div class="flex items-center gap-1.5 bg-white p-1.5 rounded border border-gray-200 shadow-sm">
+                                    <div class="font-mono font-black text-indigo-800 text-[11px] w-24 truncate px-1" title="${m.text}">${m.text}</div>
+                                    <input type="number" min="0" value="${m.qty}" onchange="updateMarkerData(${idx}, ${mIdx}, 'qty', this.value)" class="w-12 text-[10px] p-1 border border-gray-300 rounded font-bold text-center outline-none focus:border-brand-blue" placeholder="QTY">
+                                    <select onchange="updateMarkerData(${idx}, ${mIdx}, 'typeMarker', this.value)" class="w-16 text-[10px] p-1 border border-gray-300 rounded outline-none font-bold text-gray-600 focus:border-brand-blue">
+                                        <option value="Wire" ${m.typeMarker==='Wire'?'selected':''}>Wire</option>
+                                        <option value="Tube" ${m.typeMarker==='Tube'?'selected':''}>Tube</option>
+                                        <option value="Joint" ${m.typeMarker==='Joint'?'selected':''}>Joint</option>
+                                    </select>
+                                    <input type="text" list="problem-list" value="${m.problem}" onchange="updateMarkerData(${idx}, ${mIdx}, 'problem', this.value)" class="flex-1 w-20 text-[10px] p-1 border border-gray-300 rounded outline-none focus:border-brand-blue" placeholder="Problem...">
+                                    <button onclick="removeMarkerFromIMPP(${idx}, ${mIdx})" class="text-gray-400 hover:text-red-500 px-1.5"><i class="fas fa-times"></i></button>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>`;
+                }
+            }).join(''); 
+        }
+
         function exportJSON_Marker() { if(tempAssyListMarker.length===0) return showMessage("Antrian kosong!"); const a=document.createElement('a'); a.href="data:text/json;charset=utf-8,"+encodeURIComponent(JSON.stringify(tempAssyListMarker)); a.download="kanban_marker_"+Date.now()+".json"; document.body.appendChild(a); a.click(); a.remove(); }
         function importJSON_Marker(e) { const f=e.target.files[0]; if(!f) return; const r=new FileReader(); r.onload=e=>{ try{ tempAssyListMarker=tempAssyListMarker.concat(JSON.parse(e.target.result)); renderTempListMarker(); showMessage("Data di-import!"); }catch(err){showMessage("JSON tidak valid!");} }; r.readAsText(f); e.target.value=''; }
         
         async function checkDuplicatesBeforeConfirm() {
             if(tempAssyListMarker.length===0) return showMessage("List masih kosong!");
+
+            let invalidQty = false;
+            tempAssyListMarker.forEach(item => {
+                if(item.type === 'ALL' && (!item.qty || item.qty <= 0)) invalidQty = true;
+                if(item.type === 'IMPP') {
+                    item.markers.forEach(m => { if(!m.qty || m.qty <= 0) invalidQty = true; });
+                }
+            });
+            if(invalidQty) {
+                showMessage("Terdapat Item/Marker dengan QTY 0. Harap isi dengan benar!");
+                return;
+            }
             
             const loadingEl = document.getElementById('stat-loading');
             if (loadingEl) {
@@ -637,7 +812,6 @@
             
             let isolatedRequests = db.requests.filter(r => r.systemType === currentUser.section);
             let activeReqs = isolatedRequests.filter(req => req.status !== STATUS_FINISHED);
-            
             activeReqs.sort((a,b) => a.timestamp - b.timestamp);
 
             const end = new Date();
@@ -647,27 +821,25 @@
             let dupesByTempItem = [];
             tempAssyListMarker.forEach(tempItem => {
                 let matches = [];
-                const isMatch = (reqItem) => 
-                    reqItem.assy.toUpperCase() === tempItem.assy.toUpperCase() && 
-                    reqItem.wp === tempItem.wp && 
-                    String(reqItem.qty) === String(tempItem.qty) && 
-                    (reqItem.lot||'').toUpperCase() === (tempItem.lot||'').toUpperCase() &&
-                    (reqItem.typeMarker||'').toUpperCase() === (tempItem.typeMarker||'').toUpperCase();
+                const isMatch = (reqItem) => {
+                    if(reqItem.type !== tempItem.type) return false;
+                    if(reqItem.assy.toUpperCase() !== tempItem.assy.toUpperCase()) return false;
+                    if(reqItem.wp !== tempItem.wp) return false;
+                    if((reqItem.lot||'').toUpperCase() !== (tempItem.lot||'').toUpperCase()) return false;
                     
-                activeReqs.forEach(req => {
-                    req.items.forEach(reqItem => {
-                        if(isMatch(reqItem)) matches.push({ existingReq: req, source: 'ACTIVE' });
-                    });
-                });
-                recentHistory.forEach(req => {
-                    req.items.forEach(reqItem => {
-                        if(isMatch(reqItem)) matches.push({ existingReq: req, source: 'HISTORY' });
-                    });
-                });
+                    if(tempItem.type === 'ALL') {
+                        return String(reqItem.qty) === String(tempItem.qty) && 
+                               (reqItem.typeMarker||'').toUpperCase() === (tempItem.typeMarker||'').toUpperCase();
+                    } else {
+                        // IMPP duplication focuses on Assy Level matches to prevent exact identical parent requests.
+                        return true;
+                    }
+                };
+                    
+                activeReqs.forEach(req => { req.items.forEach(reqItem => { if(isMatch(reqItem)) matches.push({ existingReq: req, source: 'ACTIVE' }); }); });
+                recentHistory.forEach(req => { req.items.forEach(reqItem => { if(isMatch(reqItem)) matches.push({ existingReq: req, source: 'HISTORY' }); }); });
                 
-                if (matches.length > 0) {
-                    dupesByTempItem.push({ tempItem: tempItem, matches: matches });
-                }
+                if (matches.length > 0) dupesByTempItem.push({ tempItem: tempItem, matches: matches });
             });
 
             if (loadingEl) {
@@ -684,7 +856,7 @@
                         <div class="bg-gray-50 p-2.5 rounded border border-gray-200">
                             <div class="text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1.5"><i class="fas fa-plus-circle text-blue-400"></i> Data Input Baru</div>
                             <div class="font-black text-brand-blue text-sm">${temp.assy}</div>
-                            <div class="text-xs font-bold text-gray-600 mt-1">WP: <span class="text-brand-teal">${temp.wp}</span> | QTY: <span class="text-brand-teal">${temp.qty}</span>${temp.lot ? ` | LOT: <span class="text-purple-600">${temp.lot}</span>` : ''} | Tipe: <span class="text-indigo-600">${temp.typeMarker||'-'}</span></div>
+                            <div class="text-xs font-bold text-gray-600 mt-1">WP: <span class="text-brand-teal">${temp.wp}</span>${temp.type==='ALL'?` | QTY: <span class="text-brand-teal">${temp.qty}</span>`:''} ${temp.lot ? ` | LOT: <span class="text-purple-600">${temp.lot}</span>` : ''} ${temp.type==='ALL'?`| Tipe: <span class="text-indigo-600">${temp.typeMarker||'-'}</span>`:''}</div>
                         </div>
                     `;
 
@@ -698,7 +870,7 @@
                                         <div class="absolute top-0 right-0 ${d.source === 'ACTIVE' ? 'bg-red-500' : 'bg-gray-500'} text-white px-2 py-0.5 text-[9px] font-black rounded-bl-lg rounded-tr uppercase shadow-sm">${d.source === 'ACTIVE' ? 'Active ' + (d.existingReq.displayId || d.existingReq.queueNum) : 'History'}</div>
                                         <div class="text-[9px] font-black ${d.source === 'ACTIVE' ? 'text-red-400' : 'text-gray-500'} uppercase tracking-widest mb-1.5"><i class="fas fa-${d.source === 'ACTIVE' ? 'copy' : 'history'}"></i> Sudah Ada di ${d.source}</div>
                                         <div class="font-black ${d.source === 'ACTIVE' ? 'text-red-700' : 'text-gray-700'} text-sm">${temp.assy}</div>
-                                        <div class="text-xs font-bold ${d.source === 'ACTIVE' ? 'text-red-600' : 'text-gray-600'} mt-1">WP: <span class="${d.source === 'ACTIVE' ? 'text-red-800' : 'text-gray-800'}">${temp.wp}</span> | QTY: <span class="${d.source === 'ACTIVE' ? 'text-red-800' : 'text-gray-800'}">${temp.qty}</span>${temp.lot ? ` | LOT: <span class="text-purple-600">${temp.lot}</span>` : ''} | Tipe: <span class="${d.source === 'ACTIVE' ? 'text-red-800' : 'text-gray-800'}">${temp.typeMarker||'-'}</span></div>
+                                        <div class="text-xs font-bold ${d.source === 'ACTIVE' ? 'text-red-600' : 'text-gray-600'} mt-1">WP: <span class="${d.source === 'ACTIVE' ? 'text-red-800' : 'text-gray-800'}">${temp.wp}</span></div>
                                         <div class="mt-2 text-[9px] font-bold ${d.source === 'ACTIVE' ? 'text-red-500 border-red-100' : 'text-gray-500 border-gray-200'} border-t pt-1.5">Oleh: ${d.existingReq.requestedBy} (SHIFT ${d.existingReq.shift}) ${d.source === 'HISTORY' ? '- ' + new Date(d.existingReq.timeFinished||d.existingReq.timestamp).toLocaleDateString() : ''}</div>
                                     </div>
                                 </div>
@@ -716,7 +888,7 @@
                                             <div class="flex justify-between items-center pr-16">
                                                 <div>
                                                     <div class="font-black ${d.source === 'ACTIVE' ? 'text-red-700' : 'text-gray-700'} text-xs">${temp.assy}</div>
-                                                    <div class="text-[10px] font-bold ${d.source === 'ACTIVE' ? 'text-red-600' : 'text-gray-600'}">WP: ${temp.wp} | QTY: ${temp.qty}${temp.lot ? ` | LOT: ${temp.lot}` : ''} | Tipe: ${temp.typeMarker||'-'}</div>
+                                                    <div class="text-[10px] font-bold ${d.source === 'ACTIVE' ? 'text-red-600' : 'text-gray-600'}">WP: ${temp.wp}</div>
                                                 </div>
                                             </div>
                                             <div class="mt-1.5 text-[8px] font-bold ${d.source === 'ACTIVE' ? 'text-red-500 border-red-100' : 'text-gray-500 border-gray-200'} border-t pt-1">Oleh: ${d.existingReq.requestedBy} (SHIFT ${d.existingReq.shift}) ${d.source === 'HISTORY' ? '- ' + new Date(d.existingReq.timeFinished||d.existingReq.timestamp).toLocaleDateString() : ''}</div>
@@ -734,30 +906,46 @@
             }
         }
 
-        function openConfirmModalMarker() { document.getElementById('confirm-list-details-marker').innerHTML = tempAssyListMarker.map(item => `<div class="flex justify-between items-center border-b border-gray-200 py-2"><div><div class="font-bold text-brand-blue text-sm">${item.assy}</div><div class="text-[10px] text-gray-500 mt-0.5">Line: ${item.line} | WP: ${item.wp} | QTY: ${item.qty}</div></div><span class="text-[9px] font-bold px-2 py-1 rounded uppercase ${item.urgent ? 'bg-red-100 text-red-600 border-red-200' : 'bg-gray-200 text-gray-600 border-gray-300'}">${item.urgent ? 'URGENT' : 'REGULAR'}</span></div>`).join(''); closeModal('modal-kanban-marker'); openModal('modal-confirm-marker'); }
+        function openConfirmModalMarker() { 
+            document.getElementById('confirm-list-details-marker').innerHTML = tempAssyListMarker.map(item => {
+                let totalQ = item.type === 'ALL' ? item.qty : item.markers.reduce((sum,m)=>sum+Number(m.qty), 0);
+                return `<div class="flex justify-between items-center border-b border-gray-200 py-2"><div><div class="font-bold text-brand-blue text-sm">${item.assy}</div><div class="text-[10px] text-gray-500 mt-0.5">Line: ${item.line} | WP: ${item.wp} | QTY: ${totalQ}</div></div><span class="text-[9px] font-bold px-2 py-1 rounded uppercase ${item.urgent ? 'bg-red-100 text-red-600 border-red-200' : 'bg-gray-200 text-gray-600 border-gray-300'}">${item.urgent ? 'URGENT' : 'REGULAR'}</span></div>`;
+            }).join(''); 
+            closeModal('modal-kanban-marker'); 
+            openModal('modal-confirm-marker'); 
+        }
         
         function submitRequestMarker() { 
             const sysType='STATION MARKER'; 
-            
             const signalStr = 'new_' + Date.now();
             const ts = Date.now();
             const d = new Date(ts);
             const ddmm = String(d.getDate()).padStart(2,'0') + String(d.getMonth()+1).padStart(2,'0');
             const shift = currentUser.shift || 'X';
 
-            if (currentKanbanTypeMarker==='ALL') { 
-                tempAssyListMarker.forEach((item, index) => { 
-                    const lineInit = getLineInit(item.line);
-                    const rnd = Math.random().toString(36).substring(2, 5).toUpperCase();
-                    const dispId = `${lineInit}${shift}-${ddmm}-${rnd}`;
-                    db.requests.push({ id: generateId()+'-'+index, displayId: dispId, systemType: sysType, shift: shift, type: 'ALL', urgent: item.urgent, items: [item], status: STATUS_WAITING, step: 0, timestamp: ts+index, requestedBy: currentUser.name, requestedStation: currentUser.section, messages: [], lastSignal: signalStr }); 
-                }); 
-            } else { 
-                const lineInit = getLineInit(tempAssyListMarker[0].line);
+            tempAssyListMarker.forEach((item, index) => { 
+                const lineInit = getLineInit(item.line);
                 const rnd = Math.random().toString(36).substring(2, 5).toUpperCase();
                 const dispId = `${lineInit}${shift}-${ddmm}-${rnd}`;
-                db.requests.push({ id: generateId(), displayId: dispId, systemType: sysType, shift: shift, type: 'IMPP', urgent: tempAssyListMarker.some(i=>i.urgent), items: [...tempAssyListMarker], status: STATUS_WAITING, step: 0, timestamp: ts, requestedBy: currentUser.name, requestedStation: currentUser.section, messages: [], lastSignal: signalStr }); 
-            } 
+                
+                db.requests.push({ 
+                    id: generateId()+'-'+index, 
+                    displayId: dispId, 
+                    systemType: sysType, 
+                    shift: shift, 
+                    type: item.type, 
+                    urgent: item.urgent, 
+                    items: [item], 
+                    status: STATUS_WAITING, 
+                    step: 0, 
+                    timestamp: ts+index, 
+                    requestedBy: currentUser.name, 
+                    requestedStation: currentUser.section, 
+                    messages: [], 
+                    lastSignal: signalStr 
+                }); 
+            }); 
+            
             saveDB(); closeModal('modal-confirm-marker'); showMessage("Request Marker berhasil dikirim!"); 
         }
 
@@ -784,7 +972,6 @@
             return groups;
         }
 
-        // POKA-YOKE Visual: Pewarnaan latar otomatis berbasis status
         function getStatusBgClass(req) {
             if (req.urgent) return 'bg-red-50/90 border-red-400 border-2';
             if (req.status === STATUS_WAITING) return 'bg-orange-500/10 border-orange-200';
@@ -814,6 +1001,10 @@
             const unread = (req.messages||[]).filter(m=>m.senderRole!==currentUser.role&&!m.isRead).length;
             const badgeHtml = unread>0 ? `<div class="absolute -top-2 -right-2 bg-red-500 text-white text-[9px] font-black w-5 h-5 flex items-center justify-center rounded-full animate-bounce shadow-md border z-20">${unread}</div>`:'';
 
+            const totalQty = req.type === 'ALL' ? item.qty : item.markers.reduce((sum,m)=>sum+Number(m.qty), 0);
+            let displayTypeMarker = item.typeMarker || '-';
+            if(req.type === 'IMPP') { const types = [...new Set(item.markers.map(m => m.typeMarker))]; displayTypeMarker = types.join(', '); }
+
             return `
             <div onclick="showDetailModal('${req.id}')" oncontextmenu="handleRightClick(event, '${req.id}')" class="cursor-pointer rounded-lg shadow-sm border ${bgClass} p-2.5 flex flex-row items-stretch gap-3 hover:shadow-md hover:border-blue-300 relative min-h-[75px]">
                 ${isUrgent?'<div class="absolute top-0 left-0 bg-red-500 text-white text-[8px] font-bold px-2 py-0.5 rounded-br-lg rounded-tl-lg blink-urgent uppercase z-10">URGENT</div>':''}
@@ -825,14 +1016,14 @@
                     </div>
                     <div class="flex-1 pl-3 border-l-2 border-white/60 overflow-hidden">
                         <div class="flex flex-wrap items-center gap-2 mb-1.5">
-                            <span class="font-display font-black text-lg text-gray-800 uppercase leading-none flex items-center">${item.assy} ${req.items.length>1?`<span class="text-[10px] text-gray-400 font-normal italic ml-1">(+${req.items.length-1})</span>`:''}${noteIndicator}</span>
+                            <span class="font-display font-black text-lg text-gray-800 uppercase leading-none flex items-center">${item.assy} ${req.type==='IMPP'?`<span class="text-[10px] text-gray-400 font-normal italic ml-1">(${item.markers.length} Items)</span>`:''}${noteIndicator}</span>
                             <span class="bg-gray-800 text-white px-2 py-0.5 rounded text-[10px] font-black uppercase shadow-sm ml-1">WP: ${item.wp||'-'}</span>
-                            <span class="bg-blue-600 text-white px-2 py-0.5 rounded text-[10px] font-black shadow-sm">QTY: ${req.items.reduce((sum, i) => sum + Number(i.qty), 0)}</span>
+                            <span class="bg-blue-600 text-white px-2 py-0.5 rounded text-[10px] font-black shadow-sm">QTY: ${totalQty}</span>
                             ${item.lot ? `<span class="bg-purple-600 text-white px-2 py-0.5 rounded text-[10px] font-black shadow-sm">${item.lot}</span>` : ''}
                         </div>
                         <div class="flex flex-wrap items-center gap-1.5">
                             <span class="text-[8px] font-bold px-1.5 py-0.5 rounded uppercase border ${req.type==='ALL'?'bg-blue-100 text-blue-700':'bg-purple-100 text-purple-700'}">${req.type}</span>
-                            <span class="text-[8px] font-bold bg-indigo-50 text-indigo-700 border-indigo-200 px-1.5 py-0.5 rounded uppercase border">${item.typeMarker||'-'}</span>
+                            <span class="text-[8px] font-bold bg-indigo-50 text-indigo-700 border-indigo-200 px-1.5 py-0.5 rounded uppercase border">${displayTypeMarker}</span>
                             <span class="text-[8px] font-bold px-1.5 py-0.5 rounded uppercase border bg-orange-100 text-orange-700">SHIFT ${req.shift||'-'}</span>
                             <span class="bg-teal-50 text-brand-teal px-1.5 py-0.5 rounded border border-teal-200 uppercase text-[8px] font-bold truncate max-w-[80px]"><i class="fas fa-user mr-1"></i>${item.pic || req.requestedBy}</span>
                         </div>
@@ -849,28 +1040,31 @@
             const isUrgent = req.urgent;
             const bgClass = getStatusBgClass(req);
             const unreadCount = (req.messages||[]).filter(m=>m.senderRole!==currentUser.role&&!m.isRead).length;
+            const item = req.items[0];
             
             const hasNote = req.items.some(i => i.note && i.note.trim() !== '');
             const noteIndicator = hasNote ? `<div class="w-1.5 h-1.5 rounded-full bg-yellow-400 ml-1 shadow-sm border border-yellow-500 inline-block shrink-0" title="Ada Keterangan Tambahan"></div>` : '';
             
+            const totalQty = req.type === 'ALL' ? item.qty : item.markers.reduce((sum,m)=>sum+Number(m.qty), 0);
+
             return `
             <div onclick="showDetailModal('${req.id}')" oncontextmenu="handleRightClick(event, '${req.id}')" class="cursor-pointer flex items-stretch gap-1 p-1.5 ${bgClass} rounded-lg shadow-sm hover:shadow relative min-h-[60px]">
                 ${req.urgent?'<div class="absolute left-0 top-0 bottom-0 w-1 bg-red-500 rounded-l-lg blink-urgent z-10"></div>':''}
                 ${unreadCount>0?`<div class="absolute -top-2 -right-2 bg-red-500 text-white text-[9px] font-black w-5 h-5 flex items-center justify-center rounded-full z-20">${unreadCount}</div>`:''}
                 <div class="w-16 text-center border-r border-white/60 pr-1 shrink-0 flex flex-col items-center justify-center ${req.urgent?'pl-2':''}">
-                    <div class="p-1 rounded border shadow-sm w-full ${getLineColor(req.items[0].line)} flex flex-col items-center justify-center">
+                    <div class="p-1 rounded border shadow-sm w-full ${getLineColor(item.line)} flex flex-col items-center justify-center">
                         <span class="text-[5px] font-bold uppercase mb-0.5 opacity-80">ID</span>
                         <span class="font-display font-black text-[9px] leading-none break-all">${req.displayId || req.queueNum}</span>
                     </div>
                 </div>
                 <div class="flex-1 flex flex-col justify-center min-w-[40px] overflow-hidden px-1">
-                    <div class="text-[10px] font-black text-gray-800 truncate flex items-center">${req.items[0].assy} ${req.items.length>1?`<span class="text-[8px] text-gray-400 italic ml-1">(+${req.items.length-1})</span>`:''}${noteIndicator}</div>
+                    <div class="text-[10px] font-black text-gray-800 truncate flex items-center">${item.assy} ${req.type==='IMPP'?`<span class="text-[8px] text-gray-400 italic ml-1">(${item.markers.length})</span>`:''}${noteIndicator}</div>
                     <div class="flex flex-wrap items-center gap-1 mt-1">
                         <span class="text-[6px] font-bold px-1 rounded uppercase border ${req.type==='ALL'?'bg-blue-100 text-blue-700':'bg-purple-100 text-purple-700'}">${req.type}</span>
                         <span class="text-[6px] font-bold bg-orange-100 text-orange-700 px-1 rounded uppercase border">SH-${req.shift||'-'}</span>
-                        <span class="text-[7px] text-brand-teal bg-teal-50 border border-teal-200 px-1 rounded uppercase font-bold truncate max-w-[50px]">${req.items[0].pic || req.requestedBy}</span>
-                        <span class="text-[7px] font-black border border-blue-200 px-1 rounded bg-blue-50 text-blue-600">QTY: ${req.items.reduce((sum, i) => sum + Number(i.qty), 0)}</span>
-                        ${req.items[0].lot ? `<span class="text-[7px] font-black border border-purple-200 bg-purple-50 text-purple-700 px-1 rounded uppercase">L: ${req.items[0].lot}</span>` : ''}
+                        <span class="text-[7px] text-brand-teal bg-teal-50 border border-teal-200 px-1 rounded uppercase font-bold truncate max-w-[50px]">${item.pic || req.requestedBy}</span>
+                        <span class="text-[7px] font-black border border-blue-200 px-1 rounded bg-blue-50 text-blue-600">QTY: ${totalQty}</span>
+                        ${item.lot ? `<span class="text-[7px] font-black border border-purple-200 bg-purple-50 text-purple-700 px-1 rounded uppercase">L: ${item.lot}</span>` : ''}
                     </div>
                 </div>
                 <div class="shrink-0 border-l border-white/60 pl-1.5 pr-1 flex items-center justify-center">${timerHTML}</div>
@@ -1120,19 +1314,12 @@
             saveDB(); closeModal('modal-progress'); 
         }
 
-        function leaderPickUp(id) { const idx = db.requests.findIndex(r => r.id === id); if(idx > -1) { db.requests[idx].status = STATUS_PICKED_UP; db.requests[idx].timePickedUp = Date.now(); db.requests[idx].lastSignal = 'pickedup_'+Date.now(); saveDB(); showMessage("Berhasil! Menunggu gudang menyelesaikan tiket."); } }
-        
         function openFinishModal(id) { 
             document.getElementById('finish-req-id').value = id; 
-            
-            // Cegah error: Pastikan input ada sebelum direset
             const nameInput = document.getElementById('picker-name-input');
             if (nameInput) nameInput.value = ''; 
-            
             openModal('modal-picker'); 
-            setTimeout(() => {
-                if (nameInput) nameInput.focus();
-            }, 100); 
+            setTimeout(() => { if (nameInput) nameInput.focus(); }, 100); 
         }
 
         async function archiveToFirestore(finishedReq) {
@@ -1209,7 +1396,7 @@
 
             let lines = [];
             item.markers.forEach(m => {
-                for(let i=0; i<Number(item.qty); i++) lines.push(m);
+                for(let i=0; i<Number(m.qty); i++) lines.push(m.text);
             });
             const textToCopy = lines.join('\n');
             
@@ -1314,7 +1501,28 @@
             
             let itemsHtml = `<div class="border border-gray-200 rounded-lg bg-white shadow-sm flex flex-col overflow-hidden">` + req.items.map((item, idx) => {
                 const isIMPP = item.type === 'IMPP';
-                const markersHtml = isIMPP && item.markers ? `<div class="w-1/2 pl-3 border-l border-gray-100 flex flex-col bg-gray-50/50 relative group"><div class="flex justify-between items-center mb-2 border-b border-gray-200 pb-1 shrink-0"><span class="text-[9px] font-black text-indigo-800 uppercase bg-indigo-100 px-2 py-0.5 rounded shadow-sm border border-indigo-200"><i class="fas fa-list-ol mr-1"></i>Marker ${item.typeMarker}</span><button onclick="copyMarkersToClipboard('${req.id}', ${idx})" class="text-[9px] font-bold text-brand-teal bg-white border border-teal-200 px-2 py-0.5 rounded shadow-sm hover:bg-teal-50 transition"><i class="fas fa-copy"></i> Salin (${item.qty}x)</button></div><div class="flex flex-wrap gap-1.5 overflow-y-auto max-h-28 pr-1">${item.markers.map(m=>`<span class="w-fit bg-white text-indigo-700 px-2 py-1 rounded-md text-xs font-black border border-indigo-100 shadow-sm">${m}</span>`).join('')}</div>${item.problem?`<div class="mt-2 pt-1 border-t border-red-100 text-[9px] text-red-600 bg-red-50 p-1.5 rounded font-bold shrink-0"><i class="fas fa-exclamation-triangle"></i> ${item.problem}</div>`:''}</div>` : '';
+                const markersHtml = isIMPP && item.markers ? `
+                <div class="w-1/2 pl-3 border-l border-gray-100 flex flex-col bg-gray-50/50 relative group">
+                    <div class="flex justify-between items-center mb-2 border-b border-gray-200 pb-1 shrink-0">
+                        <span class="text-[9px] font-black text-indigo-800 uppercase bg-indigo-100 px-2 py-0.5 rounded shadow-sm border border-indigo-200"><i class="fas fa-list-ol mr-1"></i>Daftar Marker</span>
+                        <button onclick="copyMarkersToClipboard('${req.id}', ${idx})" class="text-[9px] font-bold text-brand-teal bg-white border border-teal-200 px-2 py-0.5 rounded shadow-sm hover:bg-teal-50 transition"><i class="fas fa-copy"></i> Salin (${item.qty||item.markers.reduce((s,m)=>s+Number(m.qty),0)}x)</button>
+                    </div>
+                    <div class="flex flex-col gap-1 overflow-y-auto max-h-32 pr-1">
+                        ${item.markers.map(m => `
+                            <div class="flex justify-between items-center bg-white p-1 rounded border shadow-sm">
+                                <span class="font-mono font-black text-indigo-800 text-[10px] w-24 truncate px-1" title="${m.text}">${m.text}</span>
+                                <span class="text-[8px] font-bold bg-gray-100 px-1 rounded">${m.typeMarker}</span>
+                                <span class="text-[9px] font-black text-blue-600 bg-blue-50 px-1.5 rounded border border-blue-100">QTY: ${m.qty}</span>
+                                ${m.problem ? `<span class="text-[8px] text-red-500 font-bold max-w-[60px] truncate" title="${m.problem}">${m.problem}</span>` : ''}
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>` : '';
+
+                const hasNote = item.note && item.note.trim() !== '';
+                const noteIndicator = hasNote ? `<div class="w-1.5 h-1.5 rounded-full bg-yellow-400 ml-1 shadow-sm border border-yellow-500 inline-block shrink-0" title="Ada Keterangan Tambahan"></div>` : '';
+                const totalQty = req.type === 'ALL' ? item.qty : item.markers.reduce((sum,m)=>sum+Number(m.qty), 0);
+
                 return `
                 <div class="flex items-stretch py-2.5 px-3 border-b hover:bg-gray-50 relative">
                     ${item.urgent?`<span class="absolute left-0 top-0 bottom-0 w-1 bg-red-500 animate-pulse"></span>`:''}
@@ -1323,8 +1531,9 @@
                         <div class="flex items-center gap-1.5 mb-1.5 flex-wrap">
                             <span class="text-base font-display font-black text-gray-800 uppercase">${item.assy}</span>
                             <span class="bg-gray-800 text-white px-2 py-0.5 rounded text-[10px] font-black uppercase shadow-sm">WP: ${item.wp||'-'}</span>
-                            <span class="bg-blue-600 text-white px-2 py-0.5 rounded text-[10px] font-black shadow-sm">QTY: ${item.qty}</span>
+                            <span class="bg-blue-600 text-white px-2 py-0.5 rounded text-[10px] font-black shadow-sm">QTY: ${totalQty}</span>
                             ${item.lot?`<span class="text-[10px] font-black bg-purple-600 px-2 py-0.5 rounded shadow-sm text-white">${item.lot}</span>`:''}
+                            ${noteIndicator}
                         </div>
                         <div class="flex flex-wrap gap-1.5 text-[9px] font-bold text-gray-500 mt-0.5">
                             <span class="bg-gray-100 px-1.5 py-0.5 rounded border uppercase">Line: ${item.line}</span>
