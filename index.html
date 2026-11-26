@@ -4,8 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>E-Kanban | Station Marker</title>
-    <meta http-equiv="refresh" content="0; url=https://github.com">
-
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Nunito:wght@700;800;900&display=swap" rel="stylesheet">
@@ -86,6 +84,10 @@
                 </div>
                 <div class="flex items-center border rounded-full px-1 py-0.5 bg-white text-[10px] shadow-sm border-brand-teal"><span class="text-brand-teal font-bold px-2 py-1 uppercase">STATION</span><span class="text-gray-700 font-black bg-teal-50 rounded-full px-3 py-1" id="hdr-section">STATION MARKER</span></div>
                 <div class="ml-auto flex items-center gap-2">
+                    <button id="btn-gsheet-sync" onclick="syncGsheetReadyItems(true)" class="flex items-center gap-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-2.5 py-1 rounded-full border border-emerald-200 text-[10px] font-black transition cursor-pointer" title="Klik untuk sinkronisasi ulang data Ready dari Google Sheets">
+                        <i id="gsheet-sync-icon" class="fas fa-table text-emerald-600"></i>
+                        <span id="gsheet-sync-text">GSHEET: SYNC...</span>
+                    </button>
                     <button id="btn-stats" onclick="openStatsModal()" class="hidden bg-indigo-50 text-indigo-600 hover:bg-indigo-100 px-3 py-1 rounded-full text-[10px] font-black border border-indigo-200 transition"><i class="fas fa-chart-line mr-1"></i> STATISTIK</button>
                     <div id="wh-presence-container" class="flex items-center gap-1.5 bg-gray-50 px-2 py-1 rounded-full border border-gray-200 ml-2">
                         <span class="text-[9px] font-bold text-gray-500 uppercase tracking-wider mr-1">Gudang:</span>
@@ -349,21 +351,333 @@
         let cachedHistoryBuckets = {}; 
         let loadedHistoryData = []; 
 
-        // Inisialisasi file MP3 dari repositori / cloud storage
+        // Konfigurasi Integrasi Google Sheets (Kolom AH = READY)
+        const GSHEET_ID = '1OEfUemphqF2fBM55WuchrRUgvLmDSH9vaYZ2TaClr_4';
+        const GSHEET_GID = '408912899';
+        const completedGsheetRef = firebase.database().ref('eks_completed_gsheet_serials');
+        const gsheetMetaRef = firebase.database().ref('eks_gsheet_meta');
+
+        let completedGsheetSerials = {};
+        let gsheetMetaMap = {};
+        let gsheetRawReadyRows = [];
+        let gsheetReadyRequests = [];
+        let gsheetPollInterval = null;
+        let gsheetSyncTimeout = null;
+        let isFirstGsheetLoad = true;
+        let knownGsheetSerials = new Set();
+
+        function sanitizeFirebaseKey(str) {
+            return String(str || '').trim().replace(/[.#$\[\]\/]/g, '_');
+        }
+
+        function getCellText(cell) {
+            if (!cell) return '';
+            if (cell.f !== undefined && cell.f !== null && String(cell.f).trim() !== '') return String(cell.f).trim();
+            if (cell.v !== undefined && cell.v !== null) return String(cell.v).trim();
+            return '';
+        }
+
+        function mapGsheetLine(rawLine) {
+            const upper = String(rawLine || '').trim().toUpperCase();
+            if (upper.includes('EXPORT') || upper.includes('EXP') || upper.includes('CRIMPING')) return 'Line Crimping';
+            if (upper.includes('SVREG') || upper.includes('SMV')) return 'Line SMV';
+            if (upper.includes('PROTO')) return 'Line Proto';
+            if (upper.includes('HA')) return 'Line HA';
+            return 'Line Crimping';
+        }
+
+        function parseGsheetDate(cell) {
+            if (!cell) return { ts: Date.now(), label: '-' };
+            const rawV = cell.v;
+            const label = cell.f ? String(cell.f).trim() : (rawV ? String(rawV).trim() : '-');
+            if (typeof rawV === 'string' && rawV.startsWith('Date(')) {
+                const parts = rawV.slice(5, -1).split(',').map(n => parseInt(n.trim(), 10));
+                if (parts.length >= 3 && !isNaN(parts[0])) {
+                    const dt = new Date(parts[0], parts[1], parts[2], parts[3] || 0, parts[4] || 0, parts[5] || 0);
+                    if (!isNaN(dt.getTime())) return { ts: dt.getTime(), label: label };
+                }
+            }
+            if (label && label !== '-') {
+                const parsed = Date.parse(label);
+                if (!isNaN(parsed)) return { ts: parsed, label: label };
+                const m = label.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+                if (m) {
+                    const yr = m[3].length === 2 ? 2000 + parseInt(m[3], 10) : parseInt(m[3], 10);
+                    const dt = new Date(yr, parseInt(m[2], 10) - 1, parseInt(m[1], 10));
+                    if (!isNaN(dt.getTime())) return { ts: dt.getTime(), label: label };
+                }
+            }
+            return { ts: Date.now(), label: label };
+        }
+
+        async function fetchGsheetQuery(includeColAI = true) {
+            // Kolom: B=Serial WO ID, E=ASSY NO, G=Qty, H=WP, K=Line, L=Lot, AC=TGL PRINT, AF=PIC, AH=STATUS MARKER, AI=No BOX
+            const cols = includeColAI
+                ? 'B, E, G, H, K, L, AC, AF, AH, AI'
+                : 'B, E, G, H, K, L, AC, AF, AH';
+            const tq = encodeURIComponent(`SELECT ${cols} WHERE lower(AH) contains 'ready'`);
+            const url = `https://docs.google.com/spreadsheets/d/${GSHEET_ID}/gviz/tq?gid=${GSHEET_GID}&headers=1&tqx=out:json&tq=${tq}&_=${Date.now()}`;
+
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 15000);
+            try {
+                const res = await fetch(url, {
+                    method: 'GET',
+                    mode: 'cors',
+                    credentials: 'omit',
+                    cache: 'no-store',
+                    signal: controller.signal
+                });
+                const text = await res.text();
+                if (!res.ok) {
+                    throw new Error(`HTTP_${res.status}`);
+                }
+                if (text.trim().startsWith('<') || !text.includes('google.visualization.Query.setResponse')) {
+                    throw new Error('AUTH_REQUIRED');
+                }
+                const startIdx = text.indexOf('{');
+                const endIdx = text.lastIndexOf('}');
+                if (startIdx === -1 || endIdx === -1) {
+                    throw new Error('INVALID_RESPONSE');
+                }
+                return JSON.parse(text.slice(startIdx, endIdx + 1));
+            } finally {
+                clearTimeout(timer);
+            }
+        }
+
+        function syncGsheetJsonpFallback(includeColAI = true, isManual = false) {
+            const oldScript = document.getElementById('gsheet-jsonp-script');
+            if (oldScript) oldScript.remove();
+            if (gsheetSyncTimeout) clearTimeout(gsheetSyncTimeout);
+
+            const cols = includeColAI
+                ? 'B, E, G, H, K, L, AC, AF, AH, AI'
+                : 'B, E, G, H, K, L, AC, AF, AH';
+            const tq = encodeURIComponent(`SELECT ${cols} WHERE lower(AH) contains 'ready'`);
+            const url = `https://docs.google.com/spreadsheets/d/${GSHEET_ID}/gviz/tq?gid=${GSHEET_GID}&headers=1&tqx=out:json;responseHandler:handleGsheetSync&tq=${tq}&_=${Date.now()}`;
+
+            const script = document.createElement('script');
+            script.id = 'gsheet-jsonp-script';
+            script.src = url;
+            script.onerror = function() {
+                const icon = document.getElementById('gsheet-sync-icon');
+                const txt = document.getElementById('gsheet-sync-text');
+                if (icon) icon.className = 'fas fa-exclamation-triangle text-red-500';
+                if (txt) txt.textContent = 'GSHEET: GAGAL';
+                if (isManual) showMessage('Gagal memuat Google Sheets. Jika dibuka via file lokal, coba buka lewat GitHub Pages atau klik File > Bagikan > Publikasikan ke web di GSheet.');
+            };
+            document.body.appendChild(script);
+        }
+
+        async function syncGsheetReadyItems(isManual = false) {
+            const icon = document.getElementById('gsheet-sync-icon');
+            const txt = document.getElementById('gsheet-sync-text');
+            if (icon) icon.className = 'fas fa-sync fa-spin text-emerald-600';
+            if (isManual && txt) txt.textContent = 'GSHEET: SYNC...';
+
+            try {
+                let data = await fetchGsheetQuery(true);
+
+                // Jika kolom AI (No BOX) belum ada di sheet, otomatis ulangi query tanpa kolom AI
+                if (data && data.status === 'error') {
+                    const errReason = (data.errors && data.errors[0] && data.errors[0].reason) || '';
+                    const errMsg = (data.errors && data.errors[0] && (data.errors[0].detailed_message || data.errors[0].message)) || '';
+                    if (errReason === 'invalid_query' || errMsg.toUpperCase().includes('AI') || errMsg.toUpperCase().includes('NO_COLUMN')) {
+                        data = await fetchGsheetQuery(false);
+                    }
+                }
+
+                window.handleGsheetSync(data, isManual);
+            } catch (err) {
+                console.warn('GSheet fetch gagal, detail:', err);
+                const msg = String(err && err.message ? err.message : err);
+
+                if (msg === 'AUTH_REQUIRED') {
+                    if (icon) icon.className = 'fas fa-lock text-red-500';
+                    if (txt) txt.textContent = 'GSHEET: TERKUNCI';
+                    if (isManual) showMessage('GSheet meminta login. Pastikan sudah "Anyone with the link: Viewer" dan coba juga menu File > Bagikan > Publikasikan ke web.');
+                    return;
+                }
+
+                if (err && err.name === 'AbortError') {
+                    if (icon) icon.className = 'fas fa-exclamation-circle text-orange-500';
+                    if (txt) txt.textContent = 'GSHEET: TIMEOUT';
+                    if (isManual) showMessage('Koneksi ke Google Sheets terlalu lama (Timeout). Coba klik ulang.');
+                    return;
+                }
+
+                // Fallback JSONP khusus jika browser memblokir fetch (misalnya dibuka via file://)
+                syncGsheetJsonpFallback(true, isManual);
+            }
+        }
+
+        window.handleGsheetSync = function(response, isManual = false) {
+            if (gsheetSyncTimeout) clearTimeout(gsheetSyncTimeout);
+            const icon = document.getElementById('gsheet-sync-icon');
+            const txt = document.getElementById('gsheet-sync-text');
+
+            if (!response || response.status === 'error') {
+                const detail = (response && response.errors && response.errors[0])
+                    ? (response.errors[0].detailed_message || response.errors[0].message || response.errors[0].reason)
+                    : 'Respons tidak dikenali';
+                console.error('GSheet GViz Error:', response);
+                if (icon) icon.className = 'fas fa-exclamation-triangle text-red-500';
+                if (txt) txt.textContent = 'GSHEET: ERROR';
+                if (isManual) showMessage(`Error GSheet: ${detail}`);
+                return;
+            }
+
+            const rows = (response.table && response.table.rows) ? response.table.rows : [];
+            const parsedRows = [];
+
+            rows.forEach((r, idx) => {
+                if (!r || !r.c) return;
+                const c = r.c;
+                const statusMarker = getCellText(c[8]).toUpperCase();
+                if (statusMarker !== 'READY') return;
+
+                const serialWO = getCellText(c[0]).toUpperCase();
+                const assy = getCellText(c[1]).toUpperCase();
+                if (!assy) return;
+
+                const qtyVal = (c[2] && typeof c[2].v === 'number') ? c[2].v : (parseInt(getCellText(c[2]), 10) || 0);
+                const wp = getCellText(c[3]).toUpperCase();
+                const rawLine = getCellText(c[4]);
+                const mappedLine = mapGsheetLine(rawLine);
+                const lot = getCellText(c[5]).toUpperCase();
+                const tglPrintObj = parseGsheetDate(c[6]);
+                const picWh = getCellText(c[7]).toUpperCase() || '-';
+                const noBox = getCellText(c[9]).toUpperCase();
+
+                const effectiveSerial = serialWO || `GS-${assy}-${wp}-${qtyVal}-${lot}-${noBox}-${idx}`;
+                const safeKey = sanitizeFirebaseKey(effectiveSerial);
+
+                parsedRows.push({
+                    safeKey,
+                    serialWO: effectiveSerial,
+                    assy,
+                    qty: qtyVal,
+                    wp,
+                    rawLine,
+                    line: mappedLine,
+                    lot,
+                    tglPrintTs: tglPrintObj.ts,
+                    tglPrintLabel: tglPrintObj.label,
+                    picWh,
+                    noBox
+                });
+            });
+
+            gsheetRawReadyRows = parsedRows;
+            rebuildGsheetRequests();
+
+            if (icon) icon.className = 'fas fa-table text-emerald-600';
+            if (txt) txt.textContent = `GSHEET: ${gsheetReadyRequests.length} READY`;
+
+            renderData();
+        };
+
+        function rebuildGsheetRequests() {
+            const activeGsheet = [];
+            let newlyReadyForUser = null;
+
+            gsheetRawReadyRows.forEach(row => {
+                // Validasi Serial WO ID: jika sudah ditandai selesai di sistem ini, abaikan meski di GSheet masih READY
+                if (completedGsheetSerials && completedGsheetSerials[row.safeKey]) {
+                    return;
+                }
+
+                const meta = (gsheetMetaMap && gsheetMetaMap[row.safeKey]) ? gsheetMetaMap[row.safeKey] : {};
+                const boxLabel = row.noBox ? `BOX: ${row.noBox}` : 'BOX: -';
+                const noteText = `GSheet Auto-Ready | Serial WO: ${row.serialWO} | No Box: ${row.noBox || '-'} | Tgl Print: ${row.tglPrintLabel}`;
+
+                const reqObj = {
+                    id: 'GS-' + row.safeKey,
+                    displayId: boxLabel,
+                    isFromGsheet: true,
+                    gsheetSerial: row.serialWO,
+                    gsheetSafeKey: row.safeKey,
+                    noBox: row.noBox || '-',
+                    tglPrintLabel: row.tglPrintLabel,
+                    rawLine: row.rawLine,
+                    systemType: 'STATION MARKER',
+                    shift: '-',
+                    type: 'ALL',
+                    urgent: !!meta.urgent,
+                    items: [{
+                        assy: row.assy,
+                        wp: row.wp,
+                        qty: row.qty,
+                        lot: row.lot,
+                        line: row.line,
+                        note: noteText,
+                        pic: row.picWh,
+                        type: 'ALL',
+                        typeMarker: 'Wire',
+                        urgent: !!meta.urgent
+                    }],
+                    status: STATUS_READY,
+                    step: 4,
+                    timestamp: row.tglPrintTs,
+                    timeAccepted: row.tglPrintTs,
+                    timeReady: row.tglPrintTs,
+                    requestedBy: 'GSHEET',
+                    supplierBy: row.picWh,
+                    requestedStation: 'STATION MARKER',
+                    messages: meta.messages ? Object.values(meta.messages) : []
+                };
+
+                activeGsheet.push(reqObj);
+
+                if (!isFirstGsheetLoad && !knownGsheetSerials.has(row.safeKey)) {
+                    if (currentUser && currentUser.role === 'leader' && (currentUser.line === 'ALL' || currentUser.line === row.line)) {
+                        newlyReadyForUser = reqObj;
+                    }
+                }
+            });
+
+            knownGsheetSerials = new Set(gsheetRawReadyRows.map(r => r.safeKey));
+            isFirstGsheetLoad = false;
+            gsheetReadyRequests = activeGsheet;
+
+            const txt = document.getElementById('gsheet-sync-text');
+            if (txt && !txt.textContent.includes('GAGAL') && !txt.textContent.includes('ERROR') && !txt.textContent.includes('TIMEOUT')) {
+                txt.textContent = `GSHEET: ${gsheetReadyRequests.length} READY`;
+            }
+
+            if (newlyReadyForUser) {
+                playBeep('ready');
+                triggerDesktopNotification('Part READY (GSheet)!', `Siap diambil (${newlyReadyForUser.displayId}): ${newlyReadyForUser.items[0].assy}`);
+            }
+        }
+
+        function getAllActiveRequests() {
+            const manualReqs = (db.requests || []).filter(r => r.systemType === currentUser.section && r.status !== STATUS_FINISHED);
+            const gsheetReqs = currentUser.section === 'STATION MARKER' ? gsheetReadyRequests : [];
+            return [...manualReqs, ...gsheetReqs];
+        }
+
         const announcerAudio = new Audio('announcer.mp3');
-        
-        // POKA-YOKE: Unlocking audio saat ada interaksi user pertama kali (klik login) agar tidak diblokir browser
+        announcerAudio.preload = 'auto';
+
         function initAudio() {
-            announcerAudio.load();
-            announcerAudio.volume = 0; // Mute sementara untuk bypass kebijakan autoplay
-            
-            let playPromise = announcerAudio.play();
-            if (playPromise !== undefined) {
-                playPromise.then(() => {
-                    announcerAudio.pause();
-                    announcerAudio.currentTime = 0;
-                    announcerAudio.volume = 1; // Kembalikan ke volume normal untuk notifikasi sesungguhnya
-                }).catch(e => console.warn("Audio unlock pending interaction", e));
+            try {
+                announcerAudio.volume = 0;
+                const playPromise = announcerAudio.play();
+                if (playPromise !== undefined) {
+                    playPromise.then(() => {
+                        announcerAudio.pause();
+                        announcerAudio.currentTime = 0;
+                        announcerAudio.volume = 1;
+                    }).catch(() => {
+                        announcerAudio.volume = 1;
+                    });
+                } else {
+                    announcerAudio.volume = 1;
+                }
+            } catch (e) {
+                announcerAudio.volume = 1;
             }
         }
 
@@ -413,10 +727,22 @@
         function initRealtimeDB() { 
             dbRef.on('value', (snapshot) => { 
                 const data = snapshot.val(); 
-                if (data) { db = data; } else { db = { requests: [] }; dbRef.set(db); } 
+                if (data) { db = data; if (!db.requests) db.requests = []; } else { db = { requests: [] }; dbRef.set(db); } 
                 renderData(); 
                 checkNewNotifications(); 
             }); 
+
+            completedGsheetRef.on('value', (snapshot) => {
+                completedGsheetSerials = snapshot.val() || {};
+                rebuildGsheetRequests();
+                renderData();
+            });
+
+            gsheetMetaRef.on('value', (snapshot) => {
+                gsheetMetaMap = snapshot.val() || {};
+                rebuildGsheetRequests();
+                renderData();
+            });
         }
         function saveDB() { dbRef.set(db); }
 
@@ -478,6 +804,7 @@
             if(clockInterval) clearInterval(clockInterval); 
             if(whPresenceInterval) clearInterval(whPresenceInterval);
             if(window.whCheckInterval) clearInterval(window.whCheckInterval);
+            if(gsheetPollInterval) clearInterval(gsheetPollInterval);
             document.getElementById('login-page').classList.remove('hidden'); 
             document.getElementById('main-app').classList.add('hidden'); 
         }
@@ -525,6 +852,10 @@
             isHistoryOpen = false; updateHistoryPanelCSS(); 
             if(clockInterval) clearInterval(clockInterval); updateClock(); clockInterval = setInterval(updateClock, 1000); 
             if(timeInterval) clearInterval(timeInterval); timeInterval = setInterval(updateTimers, 1000); 
+
+            syncGsheetReadyItems(false);
+            if(gsheetPollInterval) clearInterval(gsheetPollInterval);
+            gsheetPollInterval = setInterval(() => syncGsheetReadyItems(false), 20000);
             
             renderData(); 
         }
@@ -813,7 +1144,7 @@
             }
             
             let isolatedRequests = db.requests.filter(r => r.systemType === currentUser.section);
-            let activeReqs = isolatedRequests.filter(req => req.status !== STATUS_FINISHED);
+            let activeReqs = getAllActiveRequests();
             activeReqs.sort((a,b) => a.timestamp - b.timestamp);
 
             const end = new Date();
@@ -838,7 +1169,7 @@
                     }
                 };
                     
-                activeReqs.forEach(req => { req.items.forEach(reqItem => { if(isMatch(reqItem)) matches.push({ existingReq: req, source: 'ACTIVE' }); }); });
+                activeReqs.forEach(req => { req.items.forEach(reqItem => { if(isMatch(reqItem)) matches.push({ existingReq: req, source: req.isFromGsheet ? 'GSHEET READY' : 'ACTIVE' }); }); });
                 recentHistory.forEach(req => { req.items.forEach(reqItem => { if(isMatch(reqItem)) matches.push({ existingReq: req, source: 'HISTORY' }); }); });
                 
                 if (matches.length > 0) dupesByTempItem.push({ tempItem: tempItem, matches: matches });
@@ -868,12 +1199,12 @@
                             <div class="border p-3 rounded-lg bg-white mb-3 shadow-sm">
                                 <div class="flex flex-col md:flex-row gap-3">
                                     <div class="flex-1">${tempHtml}</div>
-                                    <div class="flex-1 ${d.source === 'ACTIVE' ? 'bg-red-50 border-red-200' : 'bg-gray-100 border-gray-300'} p-2.5 rounded border relative">
-                                        <div class="absolute top-0 right-0 ${d.source === 'ACTIVE' ? 'bg-red-500' : 'bg-gray-500'} text-white px-2 py-0.5 text-[9px] font-black rounded-bl-lg rounded-tr uppercase shadow-sm">${d.source === 'ACTIVE' ? 'Active ' + (d.existingReq.displayId || d.existingReq.queueNum) : 'History'}</div>
-                                        <div class="text-[9px] font-black ${d.source === 'ACTIVE' ? 'text-red-400' : 'text-gray-500'} uppercase tracking-widest mb-1.5"><i class="fas fa-${d.source === 'ACTIVE' ? 'copy' : 'history'}"></i> Sudah Ada di ${d.source}</div>
-                                        <div class="font-black ${d.source === 'ACTIVE' ? 'text-red-700' : 'text-gray-700'} text-sm">${temp.assy}</div>
-                                        <div class="text-xs font-bold ${d.source === 'ACTIVE' ? 'text-red-600' : 'text-gray-600'} mt-1">WP: <span class="${d.source === 'ACTIVE' ? 'text-red-800' : 'text-gray-800'}">${temp.wp}</span></div>
-                                        <div class="mt-2 text-[9px] font-bold ${d.source === 'ACTIVE' ? 'text-red-500 border-red-100' : 'text-gray-500 border-gray-200'} border-t pt-1.5">Oleh: ${d.existingReq.requestedBy} (SHIFT ${d.existingReq.shift}) ${d.source === 'HISTORY' ? '- ' + new Date(d.existingReq.timeFinished||d.existingReq.timestamp).toLocaleDateString() : ''}</div>
+                                    <div class="flex-1 ${d.source === 'GSHEET READY' ? 'bg-emerald-50 border-emerald-300' : (d.source === 'ACTIVE' ? 'bg-red-50 border-red-200' : 'bg-gray-100 border-gray-300')} p-2.5 rounded border relative">
+                                        <div class="absolute top-0 right-0 ${d.source === 'GSHEET READY' ? 'bg-emerald-600' : (d.source === 'ACTIVE' ? 'bg-red-500' : 'bg-gray-500')} text-white px-2 py-0.5 text-[9px] font-black rounded-bl-lg rounded-tr uppercase shadow-sm">${d.source === 'GSHEET READY' ? 'GSHEET ' + d.existingReq.displayId : (d.source === 'ACTIVE' ? 'Active ' + (d.existingReq.displayId || d.existingReq.queueNum) : 'History')}</div>
+                                        <div class="text-[9px] font-black ${d.source === 'GSHEET READY' ? 'text-emerald-600' : (d.source === 'ACTIVE' ? 'text-red-400' : 'text-gray-500')} uppercase tracking-widest mb-1.5"><i class="fas fa-${d.source === 'GSHEET READY' ? 'table' : (d.source === 'ACTIVE' ? 'copy' : 'history')}"></i> Sudah Ada di ${d.source}</div>
+                                        <div class="font-black ${d.source === 'GSHEET READY' ? 'text-emerald-800' : (d.source === 'ACTIVE' ? 'text-red-700' : 'text-gray-700')} text-sm">${temp.assy}</div>
+                                        <div class="text-xs font-bold ${d.source === 'GSHEET READY' ? 'text-emerald-700' : (d.source === 'ACTIVE' ? 'text-red-600' : 'text-gray-600')} mt-1">WP: <span class="${d.source === 'GSHEET READY' ? 'text-emerald-900' : (d.source === 'ACTIVE' ? 'text-red-800' : 'text-gray-800')}">${temp.wp}</span></div>
+                                        <div class="mt-2 text-[9px] font-bold ${d.source === 'GSHEET READY' ? 'text-emerald-600 border-emerald-200' : (d.source === 'ACTIVE' ? 'text-red-500 border-red-100' : 'text-gray-500 border-gray-200')} border-t pt-1.5">${d.source === 'GSHEET READY' ? 'Siap diambil di Gudang! PIC WH: ' + d.existingReq.supplierBy : 'Oleh: ' + d.existingReq.requestedBy + ' (SHIFT ' + d.existingReq.shift + ')'} ${d.source === 'HISTORY' ? '- ' + new Date(d.existingReq.timeFinished||d.existingReq.timestamp).toLocaleDateString() : ''}</div>
                                     </div>
                                 </div>
                             </div>
@@ -885,15 +1216,15 @@
                                 <div class="mt-3 pt-3 border-t border-gray-100 space-y-2">
                                     <div class="text-[9px] font-black text-red-500 uppercase tracking-widest"><i class="fas fa-exclamation-triangle"></i> Ditemukan ${mList.length} Data Serupa:</div>
                                     ${mList.map(d => `
-                                        <div class="${d.source === 'ACTIVE' ? 'bg-red-50 border-red-200' : 'bg-gray-100 border-gray-300'} p-2 rounded border relative">
-                                            <div class="absolute top-0 right-0 ${d.source === 'ACTIVE' ? 'bg-red-500' : 'bg-gray-500'} text-white px-2 py-0.5 text-[9px] font-black rounded-bl-lg rounded-tr uppercase shadow-sm">${d.source === 'ACTIVE' ? 'Active ' + (d.existingReq.displayId || d.existingReq.queueNum) : 'History'}</div>
+                                        <div class="${d.source === 'GSHEET READY' ? 'bg-emerald-50 border-emerald-300' : (d.source === 'ACTIVE' ? 'bg-red-50 border-red-200' : 'bg-gray-100 border-gray-300')} p-2 rounded border relative">
+                                            <div class="absolute top-0 right-0 ${d.source === 'GSHEET READY' ? 'bg-emerald-600' : (d.source === 'ACTIVE' ? 'bg-red-500' : 'bg-gray-500')} text-white px-2 py-0.5 text-[9px] font-black rounded-bl-lg rounded-tr uppercase shadow-sm">${d.source === 'GSHEET READY' ? 'GSHEET ' + d.existingReq.displayId : (d.source === 'ACTIVE' ? 'Active ' + (d.existingReq.displayId || d.existingReq.queueNum) : 'History')}</div>
                                             <div class="flex justify-between items-center pr-16">
                                                 <div>
-                                                    <div class="font-black ${d.source === 'ACTIVE' ? 'text-red-700' : 'text-gray-700'} text-xs">${temp.assy}</div>
-                                                    <div class="text-[10px] font-bold ${d.source === 'ACTIVE' ? 'text-red-600' : 'text-gray-600'}">WP: ${temp.wp}</div>
+                                                    <div class="font-black ${d.source === 'GSHEET READY' ? 'text-emerald-800' : (d.source === 'ACTIVE' ? 'text-red-700' : 'text-gray-700')} text-xs">${temp.assy}</div>
+                                                    <div class="text-[10px] font-bold ${d.source === 'GSHEET READY' ? 'text-emerald-700' : (d.source === 'ACTIVE' ? 'text-red-600' : 'text-gray-600')}">WP: ${temp.wp}</div>
                                                 </div>
                                             </div>
-                                            <div class="mt-1.5 text-[8px] font-bold ${d.source === 'ACTIVE' ? 'text-red-500 border-red-100' : 'text-gray-500 border-gray-200'} border-t pt-1">Oleh: ${d.existingReq.requestedBy} (SHIFT ${d.existingReq.shift}) ${d.source === 'HISTORY' ? '- ' + new Date(d.existingReq.timeFinished||d.existingReq.timestamp).toLocaleDateString() : ''}</div>
+                                            <div class="mt-1.5 text-[8px] font-bold ${d.source === 'GSHEET READY' ? 'text-emerald-600 border-emerald-200' : (d.source === 'ACTIVE' ? 'text-red-500 border-red-100' : 'text-gray-500 border-gray-200')} border-t pt-1">${d.source === 'GSHEET READY' ? 'Siap diambil di Gudang! PIC WH: ' + d.existingReq.supplierBy : 'Oleh: ' + d.existingReq.requestedBy + ' (SHIFT ' + d.existingReq.shift + ')'} ${d.source === 'HISTORY' ? '- ' + new Date(d.existingReq.timeFinished||d.existingReq.timestamp).toLocaleDateString() : ''}</div>
                                         </div>
                                     `).join('')}
                                 </div>
@@ -1012,10 +1343,18 @@
                 ${isUrgent?'<div class="absolute top-0 left-0 bg-red-500 text-white text-[8px] font-bold px-2 py-0.5 rounded-br-lg rounded-tl-lg blink-urgent uppercase z-10">URGENT</div>':''}
                 ${badgeHtml}
                 <div class="flex-1 flex items-center pr-2 ${isUrgent?'pt-3':''}">
+                    ${req.isFromGsheet ? `
+                    <div class="text-center mr-3 w-28 shrink-0 flex flex-col items-center justify-center p-1.5 rounded border-2 border-emerald-500 bg-emerald-50 text-emerald-800 shadow-sm">
+                        <div class="text-[7px] font-black uppercase bg-emerald-600 text-white px-1.5 py-0.5 rounded-full mb-1 tracking-wider flex items-center gap-1"><i class="fas fa-table"></i> GSHEET</div>
+                        <div class="text-[7px] font-bold uppercase opacity-75 leading-none">NO BOX</div>
+                        <div class="font-display font-black text-xs leading-tight break-all text-emerald-900 mt-0.5">${req.noBox || '-'}</div>
+                    </div>
+                    ` : `
                     <div class="text-center mr-3 w-24 shrink-0 flex flex-col items-center justify-center p-1.5 rounded border shadow-sm ${getLineColor(item.line)}">
                         <div class="text-[7px] font-bold uppercase mb-0.5 opacity-80">ID KANBAN</div>
                         <div class="font-display font-black text-[11px] leading-none break-all">${req.displayId || req.queueNum}</div>
                     </div>
+                    `}
                     <div class="flex-1 pl-3 border-l-2 border-white/60 overflow-hidden">
                         <div class="flex flex-wrap items-center gap-2 mb-1.5">
                             <span class="font-display font-black text-lg text-gray-800 uppercase leading-none flex items-center">${item.assy} ${req.type==='IMPP'?`<span class="text-[10px] text-gray-400 font-normal italic ml-1">(${item.markers.length} Items)</span>`:''}${noteIndicator}</span>
@@ -1024,10 +1363,11 @@
                             ${item.lot ? `<span class="bg-purple-600 text-white px-2 py-0.5 rounded text-[10px] font-black shadow-sm">${item.lot}</span>` : ''}
                         </div>
                         <div class="flex flex-wrap items-center gap-1.5">
+                            ${req.isFromGsheet ? `<span class="text-[8px] font-bold px-1.5 py-0.5 rounded uppercase border ${getLineColor(item.line)}">${item.line}</span>` : ''}
                             <span class="text-[8px] font-bold px-1.5 py-0.5 rounded uppercase border ${req.type==='ALL'?'bg-blue-100 text-blue-700':'bg-purple-100 text-purple-700'}">${req.type}</span>
                             <span class="text-[8px] font-bold bg-indigo-50 text-indigo-700 border-indigo-200 px-1.5 py-0.5 rounded uppercase border">${displayTypeMarker}</span>
-                            <span class="text-[8px] font-bold px-1.5 py-0.5 rounded uppercase border bg-orange-100 text-orange-700">SHIFT ${req.shift||'-'}</span>
-                            <span class="bg-teal-50 text-brand-teal px-1.5 py-0.5 rounded border border-teal-200 uppercase text-[8px] font-bold truncate max-w-[80px]"><i class="fas fa-user mr-1"></i>${item.pic || req.requestedBy}</span>
+                            ${req.isFromGsheet ? `<span class="text-[8px] font-bold px-1.5 py-0.5 rounded uppercase border bg-emerald-100 text-emerald-800 border-emerald-200"><i class="fas fa-print mr-1"></i>${req.tglPrintLabel}</span>` : `<span class="text-[8px] font-bold px-1.5 py-0.5 rounded uppercase border bg-orange-100 text-orange-700">SHIFT ${req.shift||'-'}</span>`}
+                            <span class="bg-teal-50 text-brand-teal px-1.5 py-0.5 rounded border border-teal-200 uppercase text-[8px] font-bold truncate max-w-[110px]"><i class="fas fa-user mr-1"></i>${req.isFromGsheet ? 'WH: ' + (req.supplierBy || '-') : (item.pic || req.requestedBy)}</span>
                         </div>
                     </div>
                 </div>
@@ -1054,17 +1394,26 @@
                 ${req.urgent?'<div class="absolute left-0 top-0 bottom-0 w-1 bg-red-500 rounded-l-lg blink-urgent z-10"></div>':''}
                 ${unreadCount>0?`<div class="absolute -top-2 -right-2 bg-red-500 text-white text-[9px] font-black w-5 h-5 flex items-center justify-center rounded-full z-20">${unreadCount}</div>`:''}
                 <div class="w-16 text-center border-r border-white/60 pr-1 shrink-0 flex flex-col items-center justify-center ${req.urgent?'pl-2':''}">
+                    ${req.isFromGsheet ? `
+                    <div class="p-1 rounded border-2 border-emerald-500 bg-emerald-50 text-emerald-800 shadow-sm w-full flex flex-col items-center justify-center">
+                        <span class="text-[5px] font-black uppercase bg-emerald-600 text-white px-1 rounded mb-0.5">GSHEET</span>
+                        <span class="text-[5px] font-bold uppercase opacity-75 leading-none">BOX</span>
+                        <span class="font-display font-black text-[9px] leading-tight break-all text-emerald-900">${req.noBox || '-'}</span>
+                    </div>
+                    ` : `
                     <div class="p-1 rounded border shadow-sm w-full ${getLineColor(item.line)} flex flex-col items-center justify-center">
                         <span class="text-[5px] font-bold uppercase mb-0.5 opacity-80">ID</span>
                         <span class="font-display font-black text-[9px] leading-none break-all">${req.displayId || req.queueNum}</span>
                     </div>
+                    `}
                 </div>
                 <div class="flex-1 flex flex-col justify-center min-w-[40px] overflow-hidden px-1">
                     <div class="text-[10px] font-black text-gray-800 truncate flex items-center">${item.assy} ${req.type==='IMPP'?`<span class="text-[8px] text-gray-400 italic ml-1">(${item.markers.length})</span>`:''}${noteIndicator}</div>
                     <div class="flex flex-wrap items-center gap-1 mt-1">
+                        ${req.isFromGsheet ? `<span class="text-[6px] font-bold px-1 rounded uppercase border ${getLineColor(item.line)}">${getLineInit(item.line)}</span>` : ''}
                         <span class="text-[6px] font-bold px-1 rounded uppercase border ${req.type==='ALL'?'bg-blue-100 text-blue-700':'bg-purple-100 text-purple-700'}">${req.type}</span>
-                        <span class="text-[6px] font-bold bg-orange-100 text-orange-700 px-1 rounded uppercase border">SH-${req.shift||'-'}</span>
-                        <span class="text-[7px] text-brand-teal bg-teal-50 border border-teal-200 px-1 rounded uppercase font-bold truncate max-w-[50px]">${item.pic || req.requestedBy}</span>
+                        ${req.isFromGsheet ? `<span class="text-[6px] font-bold bg-emerald-100 text-emerald-800 px-1 rounded uppercase border border-emerald-200">${req.tglPrintLabel}</span>` : `<span class="text-[6px] font-bold bg-orange-100 text-orange-700 px-1 rounded uppercase border">SH-${req.shift||'-'}</span>`}
+                        <span class="text-[7px] text-brand-teal bg-teal-50 border border-teal-200 px-1 rounded uppercase font-bold truncate max-w-[60px]">${item.pic || req.requestedBy}</span>
                         <span class="text-[7px] font-black border border-blue-200 px-1 rounded bg-blue-50 text-blue-600">QTY: ${totalQty}</span>
                         ${item.lot ? `<span class="text-[7px] font-black border border-purple-200 bg-purple-50 text-purple-700 px-1 rounded uppercase">L: ${item.lot}</span>` : ''}
                     </div>
@@ -1076,8 +1425,7 @@
 
         function renderData() {
             if(!currentUser) return;
-            let isolatedRequests = db.requests.filter(r => r.systemType === currentUser.section);
-            let activeReqs = isolatedRequests.filter(req => req.status !== STATUS_FINISHED);
+            let activeReqs = getAllActiveRequests();
             
             document.getElementById('queue-counter-badge').textContent = activeReqs.length;
 
@@ -1090,8 +1438,11 @@
 
             const filteredReqs = activeReqs.filter(req => {
                 const matchLine = lineFilter === 'ALL' ? true : req.items.some(i => i.line === lineFilter);
-                const matchShift = shiftFilter === 'ALL' ? true : req.shift === shiftFilter;
-                const matchSearch = req.items.some(i => (i.assy||i.item||'').toLowerCase().includes(searchVal)) || (req.displayId && req.displayId.toLowerCase().includes(searchVal));
+                const matchShift = (shiftFilter === 'ALL' || req.isFromGsheet) ? true : req.shift === shiftFilter;
+                const matchSearch = req.items.some(i => (i.assy||i.item||'').toLowerCase().includes(searchVal))
+                    || (req.displayId && req.displayId.toLowerCase().includes(searchVal))
+                    || (req.gsheetSerial && req.gsheetSerial.toLowerCase().includes(searchVal))
+                    || (req.noBox && req.noBox.toLowerCase().includes(searchVal));
                 return matchLine && matchShift && matchSearch;
             });
             
@@ -1341,6 +1692,34 @@
             const id = document.getElementById('finish-req-id').value; 
             const pName = document.getElementById('picker-name-input').value.trim().toUpperCase(); 
             if (!pName) return showMessage("Nama Pengambil harus diisi!"); 
+
+            // Cek jika tiket berasal dari Google Sheets (Validasi Serial WO ID di Firebase agar tidak muncul lagi)
+            const gsReq = gsheetReadyRequests.find(r => r.id === id);
+            if (gsReq) {
+                const finishedAt = Date.now();
+                const finishedReq = {
+                    ...gsReq,
+                    status: STATUS_FINISHED,
+                    timeFinished: finishedAt,
+                    pickedBy: pName,
+                    finishedBy: gsReq.supplierBy || '-'
+                };
+
+                completedGsheetRef.child(gsReq.gsheetSafeKey).set({
+                    serialWO: gsReq.gsheetSerial,
+                    assy: gsReq.items[0].assy,
+                    noBox: gsReq.noBox || '-',
+                    pickedBy: pName,
+                    supplierBy: gsReq.supplierBy || '-',
+                    timeFinished: finishedAt
+                });
+
+                archiveToFirestore(finishedReq);
+                closeModal('modal-picker');
+                showMessage(`Tiket GSheet (${gsReq.gsheetSerial}) selesai & divalidasi!`);
+                return;
+            }
+
             const idx = db.requests.findIndex(r => r.id === id); 
             if(idx > -1) { 
                 db.requests[idx].status = STATUS_FINISHED; 
@@ -1377,37 +1756,57 @@
 
         function handleRightClick(e, id) { 
             e.preventDefault(); 
-            const req = db.requests.find(r => r.id === id); 
+            let req = db.requests.find(r => r.id === id); 
+            if (!req) req = gsheetReadyRequests.find(r => r.id === id);
             if (!req || req.status === STATUS_FINISHED) return; 
             
             if(currentUser.role === 'leader') {
+                if (req.isFromGsheet) {
+                    showMessage("Item Ready dari GSheet tidak bisa dibatalkan. Klik tombol Selesai jika sudah diambil.");
+                    return;
+                }
                 cancelTargetId = id; document.getElementById('cancel-input').value = ''; document.getElementById('cancel-error').classList.add('hidden'); openModal('modal-cancel'); 
             } else if (currentUser.role === 'warehouse' && req.status === STATUS_READY) {
                 openFinishModal(id);
             }
         }
 
-        function executeCancel() { const req = db.requests.find(r => r.id === cancelTargetId); if(!req) return; const input = document.getElementById('cancel-input').value.trim().toUpperCase(); if (req.items.some(i => i.assy.toUpperCase() === input)) { db.requests = db.requests.filter(r => r.id !== cancelTargetId); saveDB(); closeModal('modal-cancel'); showMessage("Antrian dibatalkan."); } else document.getElementById('cancel-error').classList.remove('hidden'); }
+        function executeCancel() {
+            const req = db.requests.find(r => r.id === cancelTargetId);
+            if (!req) return;
+            const input = document.getElementById('cancel-input').value.trim().toUpperCase();
+            if (req.items.some(i => i.assy.toUpperCase() === input)) {
+                db.requests = db.requests.filter(r => r.id !== cancelTargetId);
+                saveDB();
+                closeModal('modal-cancel');
+                showMessage("Antrian dibatalkan.");
+            } else {
+                document.getElementById('cancel-error').classList.remove('hidden');
+            }
+        }
 
         window.copyMarkersToClipboard = function(reqId, itemIdx) {
-            let req = db.requests.find(r => r.id === reqId);
+            let req = (db.requests || []).find(r => r.id === reqId);
+            if (!req) req = gsheetReadyRequests.find(r => r.id === reqId);
             if (!req) req = loadedHistoryData.find(r => r.id === reqId);
             if (!req) return;
             const item = req.items[itemIdx];
-            if(!item.markers) return;
+            if (!item || !item.markers) return;
 
             let lines = [];
             item.markers.forEach(m => {
-                for(let i=0; i<Number(m.qty); i++) lines.push(m.text);
+                if (typeof m === 'object' && m !== null) {
+                    const qty = Math.max(1, Number(m.qty) || 0);
+                    for (let i = 0; i < qty; i++) lines.push(m.text);
+                } else {
+                    const qty = Math.max(1, Number(item.qty) || 1);
+                    for (let i = 0; i < qty; i++) lines.push(String(m));
+                }
             });
             const textToCopy = lines.join('\n');
-            
-            if (navigator.clipboard && window.isSecureContext) {
-                navigator.clipboard.writeText(textToCopy).then(() => showMessage("Marker disalin ke Clipboard!")).catch(() => fallbackCopyTextToClipboard(textToCopy));
-            } else {
-                fallbackCopyTextToClipboard(textToCopy);
-            }
-        }
+            fallbackCopyTextToClipboard(textToCopy);
+        };
+
         function fallbackCopyTextToClipboard(text) {
             const ta = document.createElement("textarea");
             ta.value = text; ta.style.top = "0"; ta.style.left = "0"; ta.style.position = "fixed"; document.body.appendChild(ta);
@@ -1464,9 +1863,13 @@
             const histShiftFilter = document.getElementById('history-filter-shift')?.value || 'ALL';
 
             let filtered = loadedHistoryData.filter(req => {
-                const matchSearch = histSearch === '' || req.items.some(i => (i.assy||'').toLowerCase().includes(histSearch)) || (req.displayId && req.displayId.toLowerCase().includes(histSearch));
+                const matchSearch = histSearch === ''
+                    || req.items.some(i => (i.assy||'').toLowerCase().includes(histSearch))
+                    || (req.displayId && req.displayId.toLowerCase().includes(histSearch))
+                    || (req.gsheetSerial && req.gsheetSerial.toLowerCase().includes(histSearch))
+                    || (req.noBox && req.noBox.toLowerCase().includes(histSearch));
                 const matchLine = histLineFilter === 'ALL' ? true : req.items.some(i => i.line === histLineFilter);
-                const matchShift = histShiftFilter === 'ALL' ? true : req.shift === histShiftFilter;
+                const matchShift = (histShiftFilter === 'ALL' || req.isFromGsheet) ? true : req.shift === histShiftFilter;
                 return matchSearch && matchLine && matchShift;
             });
 
@@ -1474,27 +1877,56 @@
             const limitedReqs = filtered.slice(0, 50);
 
             if(limitedReqs.length === 0) { h.innerHTML = `<div class="text-center text-gray-400 text-xs font-bold py-10">Belum ada history</div>`; return; }
-            h.innerHTML = limitedReqs.map(req => `<div onclick="showDetailModal('${req.id}')" class="cursor-pointer bg-white border border-gray-100 rounded-lg shadow-sm hover:shadow mb-2"><div class="bg-gray-50 flex justify-between items-center px-2.5 py-1.5 border-b"><div class="flex items-center gap-1.5 overflow-hidden flex-1 pr-2"><span class="font-display font-black text-[13px] text-brand-blue shrink-0">${req.displayId||'#'+req.queueNum}</span><span class="text-[8px] font-bold uppercase px-1.5 rounded border shrink-0 ${req.type==='ALL'?'bg-blue-100 text-blue-700':'bg-purple-100 text-purple-700'}">${req.type}</span><span class="text-[10px] font-bold text-gray-700 truncate">${req.items.map(i=>i.assy).join(', ')}</span></div><span class="text-[8px] text-green-600 font-bold uppercase shrink-0"><i class="fas fa-check"></i> Selesai</span></div><div class="px-2.5 py-1.5 flex justify-between items-center text-[9px] text-gray-400"><span class="font-bold truncate pr-2"><i class="fas fa-hand-holding"></i> ${req.pickedBy || req.requestedBy}</span><span class="font-mono bg-gray-100 px-1.5 py-0.5 rounded text-gray-500 shrink-0">${new Date(req.timeFinished||req.timestamp).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})} | ${new Date(req.timeFinished||req.timestamp).toLocaleDateString()}</span></div></div>`).join('');
+            h.innerHTML = limitedReqs.map(req => `<div onclick="showDetailModal('${req.id}')" class="cursor-pointer bg-white border border-gray-100 rounded-lg shadow-sm hover:shadow mb-2"><div class="bg-gray-50 flex justify-between items-center px-2.5 py-1.5 border-b"><div class="flex items-center gap-1.5 overflow-hidden flex-1 pr-2"><span class="font-display font-black text-[13px] ${req.isFromGsheet ? 'text-emerald-700' : 'text-brand-blue'} shrink-0">${req.displayId||'#'+req.queueNum}</span>${req.isFromGsheet ? '<span class="text-[7px] font-black uppercase px-1 rounded bg-emerald-600 text-white shrink-0">GSHEET</span>' : ''}<span class="text-[8px] font-bold uppercase px-1.5 rounded border shrink-0 ${req.type==='ALL'?'bg-blue-100 text-blue-700':'bg-purple-100 text-purple-700'}">${req.type}</span><span class="text-[10px] font-bold text-gray-700 truncate">${req.items.map(i=>i.assy).join(', ')}</span></div><span class="text-[8px] text-green-600 font-bold uppercase shrink-0"><i class="fas fa-check"></i> Selesai</span></div><div class="px-2.5 py-1.5 flex justify-between items-center text-[9px] text-gray-400"><span class="font-bold truncate pr-2"><i class="fas fa-hand-holding"></i> ${req.pickedBy || req.requestedBy}</span><span class="font-mono bg-gray-100 px-1.5 py-0.5 rounded text-gray-500 shrink-0">${new Date(req.timeFinished||req.timestamp).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})} | ${new Date(req.timeFinished||req.timestamp).toLocaleDateString()}</span></div></div>`).join('');
         }
 
         function toggleChatPanel() { const c = document.getElementById('chat-panel-container'); const d = document.getElementById('detail-panel-container'); const b = document.getElementById('toggle-chat-btn'); if (c.classList.contains('hidden')) { c.classList.remove('hidden'); d.classList.remove('w-full'); d.classList.add('w-2/3'); b.innerHTML=`<i class="fas fa-eye-slash mr-1"></i> Sembunyikan Chat`; } else { c.classList.add('hidden'); d.classList.remove('w-2/3'); d.classList.add('w-full'); b.innerHTML=`<i class="fas fa-comment-dots mr-1"></i> Tampilkan Chat`; } }
-        function sendChatMessage(reqId) { const i = document.getElementById('chat-input'); const t = i.value.trim(); if(!t) return; const idx = db.requests.findIndex(r => r.id === reqId); if(idx === -1) return; if(!db.requests[idx].messages) db.requests[idx].messages=[]; db.requests[idx].messages.push({senderName: currentUser.name, senderRole: currentUser.role, text: t, timestamp: Date.now(), isRead: false}); saveDB(); showDetailModal(reqId); }
+        
+        function sendChatMessage(reqId) { 
+            const i = document.getElementById('chat-input'); const t = i.value.trim(); if(!t) return; 
+            const gsReq = gsheetReadyRequests.find(r => r.id === reqId);
+            if (gsReq) {
+                gsheetMetaRef.child(gsReq.gsheetSafeKey).child('messages').push({
+                    senderName: currentUser.name, senderRole: currentUser.role, text: t, timestamp: Date.now(), isRead: false
+                });
+                i.value = '';
+                setTimeout(() => showDetailModal(reqId), 150);
+                return;
+            }
+            const idx = db.requests.findIndex(r => r.id === reqId); if(idx === -1) return; if(!db.requests[idx].messages) db.requests[idx].messages=[]; db.requests[idx].messages.push({senderName: currentUser.name, senderRole: currentUser.role, text: t, timestamp: Date.now(), isRead: false}); saveDB(); showDetailModal(reqId); 
+        }
 
         window.toggleRequestUrgent = function(reqId) {
+            const gsReq = gsheetReadyRequests.find(r => r.id === reqId);
+            if (gsReq) {
+                gsheetMetaRef.child(gsReq.gsheetSafeKey).child('urgent').set(!gsReq.urgent);
+                setTimeout(() => showDetailModal(reqId), 150);
+                return;
+            }
             const idx = db.requests.findIndex(r => r.id === reqId);
             if(idx > -1) {
                 db.requests[idx].urgent = !db.requests[idx].urgent;
                 saveDB();
                 showDetailModal(reqId);
             }
-        }
+        };
 
         function showDetailModal(id) {
             let req = db.requests.find(r => r.id === id); 
+            if (!req) { req = gsheetReadyRequests.find(r => r.id === id); }
             if (!req) { req = loadedHistoryData.find(r => r.id === id); }
             if (!req) return;
 
-            let hasUnread = false; if (req.messages && req.status !== STATUS_FINISHED) { req.messages.forEach(m => { if (m.senderRole !== currentUser.role && !m.isRead) { m.isRead = true; hasUnread = true; } }); if (hasUnread) saveDB(); }
+            if (req.isFromGsheet && req.status !== STATUS_FINISHED && gsheetMetaMap[req.gsheetSafeKey] && gsheetMetaMap[req.gsheetSafeKey].messages) {
+                const msgObj = gsheetMetaMap[req.gsheetSafeKey].messages;
+                Object.keys(msgObj).forEach(k => {
+                    if (msgObj[k].senderRole !== currentUser.role && !msgObj[k].isRead) {
+                        gsheetMetaRef.child(req.gsheetSafeKey).child('messages').child(k).child('isRead').set(true);
+                    }
+                });
+            } else {
+                let hasUnread = false; if (req.messages && req.status !== STATUS_FINISHED) { req.messages.forEach(m => { if (m.senderRole !== currentUser.role && !m.isRead) { m.isRead = true; hasUnread = true; } }); if (hasUnread) saveDB(); }
+            }
             
             let statStyle = req.status==='WAITING'?'text-yellow-600 bg-yellow-50 border-yellow-200':(req.status==='PROCESSING'?'text-blue-600 bg-blue-50 border-blue-200':(req.status==='READY'?'text-white bg-brand-teal shadow-md':'text-green-600 bg-green-50 border-green-200'));
             let displayStatus = req.status; if(displayStatus === 'PROCESSING') displayStatus += ` (${req.step}/4)`;
@@ -1503,27 +1935,32 @@
             
             let itemsHtml = `<div class="border border-gray-200 rounded-lg bg-white shadow-sm flex flex-col overflow-hidden">` + req.items.map((item, idx) => {
                 const isIMPP = item.type === 'IMPP';
+                const totalQty = req.type === 'ALL' ? item.qty : (item.markers || []).reduce((sum,m)=>sum+(typeof m === 'object' ? Number(m.qty) : Number(item.qty || 1)), 0);
                 const markersHtml = isIMPP && item.markers ? `
                 <div class="w-1/2 pl-3 border-l border-gray-100 flex flex-col bg-gray-50/50 relative group">
                     <div class="flex justify-between items-center mb-2 border-b border-gray-200 pb-1 shrink-0">
                         <span class="text-[9px] font-black text-indigo-800 uppercase bg-indigo-100 px-2 py-0.5 rounded shadow-sm border border-indigo-200"><i class="fas fa-list-ol mr-1"></i>Daftar Marker</span>
-                        <button onclick="copyMarkersToClipboard('${req.id}', ${idx})" class="text-[9px] font-bold text-brand-teal bg-white border border-teal-200 px-2 py-0.5 rounded shadow-sm hover:bg-teal-50 transition"><i class="fas fa-copy"></i> Salin (${item.qty||item.markers.reduce((s,m)=>s+Number(m.qty),0)}x)</button>
+                        <button onclick="copyMarkersToClipboard('${req.id}', ${idx})" class="text-[9px] font-bold text-brand-teal bg-white border border-teal-200 px-2 py-0.5 rounded shadow-sm hover:bg-teal-50 transition"><i class="fas fa-copy"></i> Salin (${totalQty}x)</button>
                     </div>
                     <div class="flex flex-col gap-1 overflow-y-auto max-h-32 pr-1">
-                        ${item.markers.map(m => `
+                        ${item.markers.map(m => {
+                            const mText = typeof m === 'object' ? m.text : String(m);
+                            const mType = typeof m === 'object' ? m.typeMarker : (item.typeMarker || 'Wire');
+                            const mQty = typeof m === 'object' ? m.qty : (item.qty || 1);
+                            const mProb = typeof m === 'object' ? m.problem : (item.problem || '');
+                            return `
                             <div class="flex justify-between items-center bg-white p-1 rounded border shadow-sm">
-                                <span class="font-mono font-black text-indigo-800 text-[10px] w-24 truncate px-1" title="${m.text}">${m.text}</span>
-                                <span class="text-[8px] font-bold bg-gray-100 px-1 rounded">${m.typeMarker}</span>
-                                <span class="text-[9px] font-black text-blue-600 bg-blue-50 px-1.5 rounded border border-blue-100">QTY: ${m.qty}</span>
-                                ${m.problem ? `<span class="text-[8px] text-red-500 font-bold max-w-[60px] truncate" title="${m.problem}">${m.problem}</span>` : ''}
-                            </div>
-                        `).join('')}
+                                <span class="font-mono font-black text-indigo-800 text-[10px] w-24 truncate px-1" title="${mText}">${mText}</span>
+                                <span class="text-[8px] font-bold bg-gray-100 px-1 rounded">${mType}</span>
+                                <span class="text-[9px] font-black text-blue-600 bg-blue-50 px-1.5 rounded border border-blue-100">QTY: ${mQty}</span>
+                                ${mProb ? `<span class="text-[8px] text-red-500 font-bold max-w-[60px] truncate" title="${mProb}">${mProb}</span>` : ''}
+                            </div>`;
+                        }).join('')}
                     </div>
                 </div>` : '';
 
                 const hasNote = item.note && item.note.trim() !== '';
                 const noteIndicator = hasNote ? `<div class="w-1.5 h-1.5 rounded-full bg-yellow-400 ml-1 shadow-sm border border-yellow-500 inline-block shrink-0" title="Ada Keterangan Tambahan"></div>` : '';
-                const totalQty = req.type === 'ALL' ? item.qty : item.markers.reduce((sum,m)=>sum+Number(m.qty), 0);
 
                 return `
                 <div class="flex items-stretch py-2.5 px-3 border-b hover:bg-gray-50 relative">
@@ -1593,7 +2030,10 @@
                 <div id="detail-panel-container" class="w-2/3 bg-white rounded-2xl shadow-2xl flex flex-col overflow-hidden border relative transition-all duration-300 origin-right"><div class="px-6 py-4 border-b bg-gray-50 flex justify-between shrink-0"><h3 class="font-display font-black text-lg text-brand-blue"><i class="fas fa-info-circle text-brand-teal"></i> Detail MARKER</h3><div class="flex items-center gap-3"><button id="toggle-chat-btn" onclick="toggleChatPanel()" class="text-[10px] font-bold text-gray-500 bg-white border px-3 py-1.5 rounded uppercase"><i class="fas fa-eye-slash mr-1"></i> Sembunyikan Chat</button><button onclick="closeModal('modal-detail')" class="text-gray-400 hover:text-red-500 bg-white rounded-full w-8 h-8 border"><i class="fas fa-times"></i></button></div></div><div class="p-6 flex-1 overflow-y-auto">
                     <div class="flex justify-between items-start mb-5">
                         <div>
-                            <h2 class="text-3xl font-display font-black text-brand-blue leading-none">${req.displayId || req.queueNum}</h2>
+                            <div class="flex items-center gap-2">
+                                <h2 class="text-3xl font-display font-black ${req.isFromGsheet ? 'text-emerald-700' : 'text-brand-blue'} leading-none">${req.displayId || req.queueNum}</h2>
+                                ${req.isFromGsheet ? '<span class="px-2 py-1 rounded-full bg-emerald-600 text-white text-[9px] font-black uppercase tracking-wider shadow-sm"><i class="fas fa-table mr-1"></i>GSHEET READY</span>' : ''}
+                            </div>
                             ${req.status !== STATUS_FINISHED && currentUser.role === 'leader' ? `
                             <label class="flex items-center cursor-pointer mt-3 group">
                                 <div class="relative flex items-center">
@@ -1608,6 +2048,14 @@
                         </div>
                         <span class="px-3 py-1.5 rounded text-[11px] font-black uppercase border ${statStyle}">${displayStatus}</span>
                     </div>
+                    ${req.isFromGsheet ? `
+                    <div class="mb-5 bg-emerald-50 border border-emerald-200 p-3.5 rounded-xl shadow-sm grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+                        <div><div class="text-[9px] font-bold text-emerald-600 uppercase">Serial WO ID (B)</div><div class="font-mono font-black text-emerald-900 break-all">${req.gsheetSerial}</div></div>
+                        <div><div class="text-[9px] font-bold text-emerald-600 uppercase">No BOX (AI)</div><div class="font-black text-emerald-900">${req.noBox || '-'}</div></div>
+                        <div><div class="text-[9px] font-bold text-emerald-600 uppercase">Tgl Print (AC)</div><div class="font-black text-emerald-900">${req.tglPrintLabel || '-'}</div></div>
+                        <div><div class="text-[9px] font-bold text-emerald-600 uppercase">PIC Warehouse (AF)</div><div class="font-black text-emerald-900">${req.supplierBy || '-'}</div></div>
+                    </div>
+                    ` : ''}
                     <div class="flex gap-4 mb-6 text-xs text-gray-500 font-bold bg-gray-50 p-3.5 rounded-xl border shadow-inner"><div class="flex-1"><i class="fas fa-user-circle text-gray-400"></i> ${req.requestedBy}</div><div class="flex-1"><i class="fas fa-tag text-gray-400"></i> ${req.type}</div>${req.urgent?`<div class="text-red-500 animate-pulse"><i class="fas fa-fire"></i> URGENT</div>`:''}</div>${req.status!==STATUS_WAITING&&req.status!==STATUS_FINISHED?`<div class="mb-6 bg-white p-4 rounded-xl border shadow-sm"><div class="flex gap-1.5"><div class="h-2.5 flex-1 rounded-l-full ${req.step>=1?'bg-brand-teal':'bg-gray-100'}"></div><div class="h-2.5 flex-1 ${req.step>=2?'bg-brand-teal':'bg-gray-100'}"></div><div class="h-2.5 flex-1 ${req.step>=3?'bg-brand-teal':'bg-gray-100'}"></div><div class="h-2.5 flex-1 rounded-r-full ${req.step>=4?'bg-brand-teal':'bg-gray-100'}"></div></div><div class="flex justify-between text-[9px] font-bold text-gray-400 mt-2 uppercase"><span>Accept</span><span>Print</span><span>Cut</span><span>Done</span></div></div>`:''}${histHtml}<div class="text-[11px] font-black text-brand-blue uppercase mb-2 pl-1">Data Part Request</div>${itemsHtml}</div></div>
             `;
             openModal('modal-detail'); setTimeout(() => { const c=document.getElementById('chat-messages-container'); if(c) c.scrollTop=c.scrollHeight; }, 50);
