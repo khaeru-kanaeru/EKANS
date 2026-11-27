@@ -86,15 +86,10 @@
                 </div>
                 <div class="flex items-center border rounded-full px-1 py-0.5 bg-white text-[10px] shadow-sm border-brand-teal"><span class="text-brand-teal font-bold px-2 py-1 uppercase">STATION</span><span class="text-gray-700 font-black bg-teal-50 rounded-full px-3 py-1" id="hdr-section">STATION MARKER</span></div>
                 <div class="ml-auto flex items-center gap-2">
-                    <div class="flex items-center">
-                        <button id="btn-gsheet-sync" onclick="syncGsheetReadyItems(true)" class="flex items-center gap-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-2.5 py-1 rounded-l-full border border-emerald-200 text-[10px] font-black transition cursor-pointer" title="Klik untuk sinkronisasi ulang data Ready dari Google Sheets">
-                            <i id="gsheet-sync-icon" class="fas fa-table text-emerald-600"></i>
-                            <span id="gsheet-sync-text">GSHEET: SYNC...</span>
-                        </button>
-                        <button id="btn-gsheet-config" onclick="openGsheetConfigModal()" class="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-2 py-1 rounded-r-full border border-l-0 border-emerald-200 text-[10px] font-black transition cursor-pointer" title="Pengaturan & Diagnostik Sumber Google Sheets">
-                            <i class="fas fa-cog"></i>
-                        </button>
-                    </div>
+                    <button id="btn-gsheet-sync" onclick="syncGsheetReadyItems(true)" class="flex items-center gap-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-2.5 py-1 rounded-full border border-emerald-200 text-[10px] font-black transition cursor-pointer" title="Klik untuk sinkronisasi ulang data Ready dari Google Sheets">
+                        <i id="gsheet-sync-icon" class="fas fa-table text-emerald-600"></i>
+                        <span id="gsheet-sync-text">GSHEET: SYNC...</span>
+                    </button>
                     <button id="btn-stats" onclick="openStatsModal()" class="hidden bg-indigo-50 text-indigo-600 hover:bg-indigo-100 px-3 py-1 rounded-full text-[10px] font-black border border-indigo-200 transition"><i class="fas fa-chart-line mr-1"></i> STATISTIK</button>
                     <div id="wh-presence-container" class="flex items-center gap-1.5 bg-gray-50 px-2 py-1 rounded-full border border-gray-200 ml-2">
                         <span class="text-[9px] font-bold text-gray-500 uppercase tracking-wider mr-1">Gudang:</span>
@@ -121,6 +116,11 @@
                     </select>
                 </div>
                 <div class="relative ml-1"><i class="fas fa-search absolute left-3 top-2 text-gray-300 text-xs"></i><input type="text" id="search-input" onkeyup="renderData()" placeholder="CARI ANTRIAN..." class="pl-8 pr-4 py-1.5 border border-gray-200 rounded-full text-xs font-bold text-gray-700 w-52 bg-gray-50 uppercase focus:outline-none"></div>
+                <button id="btn-open-batch-modal" type="button" onclick="openBatchCloseModal()" class="bg-brand-teal hover:bg-teal-700 text-white px-3.5 py-1.5 rounded-full text-xs font-bold shadow-md flex items-center gap-1.5 ml-1 transition cursor-pointer whitespace-nowrap" title="Buka Modal Batch Closed (Selesai)">
+                    <i class="fas fa-tasks"></i>
+                    <span>BATCH SELESAI</span>
+                    <span id="batch-ready-badge" class="bg-white/25 text-white text-[10px] font-black px-1.5 py-0.2 rounded-full">0</span>
+                </button>
                 <div class="flex gap-2 ml-1">
                     <button id="btn-new-kanban" onclick="routeNewKanban()" class="hidden bg-brand-blue hover:bg-blue-800 text-white px-4 py-1.5 rounded-full text-xs font-bold shadow-md flex items-center gap-2"><i class="fas fa-plus"></i> NEW KANBAN</button>
                 </div>
@@ -327,7 +327,11 @@
 
     <div id="modal-picker" class="hidden fixed inset-0 bg-gray-900 bg-opacity-60 z-[80] flex justify-center items-center backdrop-blur-sm">
         <div class="bg-white w-full max-w-sm rounded-xl shadow-2xl flex flex-col p-6">
-            <div class="text-center mb-4"><i class="fas fa-clipboard-check text-4xl text-brand-teal mb-3"></i><h3 class="font-display font-black text-xl text-gray-800">Selesaikan Tiket?</h3></div>
+            <div class="text-center mb-4">
+                <i class="fas fa-clipboard-check text-4xl text-brand-teal mb-3"></i>
+                <h3 id="picker-modal-title" class="font-display font-black text-xl text-gray-800">Selesaikan Tiket?</h3>
+                <p id="picker-modal-subtitle" class="hidden text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-1.5 mt-2"></p>
+            </div>
             <div class="mb-5">
                 <input type="text" id="picker-name-input" class="input-stylish w-full uppercase text-center text-sm" placeholder="NAMA PENGAMBIL (LEADER)" onkeypress="if(event.key === 'Enter') submitFinishWithPicker()">
             </div>
@@ -341,53 +345,67 @@
 
     <div id="modal-cancel" class="hidden fixed inset-0 bg-gray-900 bg-opacity-60 z-[80] flex justify-center items-center backdrop-blur-sm"><div class="bg-white w-full max-w-sm rounded-xl shadow-2xl flex flex-col p-6"><div class="text-center mb-4"><i class="fas fa-exclamation-triangle text-4xl text-red-500 mb-3"></i><h3 class="font-display font-black text-xl text-gray-800">Batalkan Antrian?</h3></div><div class="mb-4"><label class="label-stylish text-center">Ketik Nomor Assy</label><input type="text" id="cancel-input" class="input-stylish w-full text-center uppercase" placeholder="Contoh: 21N-06..."><p id="cancel-error" class="hidden text-[10px] text-red-500 font-bold text-center mt-1">Nomor Assy tidak cocok!</p></div><div class="flex gap-2"><button onclick="closeModal('modal-cancel')" class="flex-1 py-2 text-xs font-bold text-gray-500 bg-gray-100 rounded">Tutup</button><button onclick="executeCancel()" class="flex-1 py-2 bg-red-600 text-white text-xs font-bold rounded shadow">Batalkan</button></div></div></div>
 
-    <!-- Modal Pengaturan & Diagnostik Google Sheets -->
-    <div id="modal-gsheet-config" class="hidden fixed inset-0 bg-gray-900 bg-opacity-60 z-[95] flex justify-center items-center backdrop-blur-sm p-4">
-        <div class="bg-white w-full max-w-lg rounded-2xl shadow-2xl flex flex-col overflow-hidden">
-            <div class="px-5 py-4 border-b bg-emerald-50 flex justify-between items-center">
+    <!-- Modal Floating Terpisah: Batch Closed (Selesai) -->
+    <div id="modal-batch-close" class="hidden fixed inset-0 bg-gray-900 bg-opacity-60 z-[85] flex justify-center items-center backdrop-blur-sm p-4">
+        <div class="bg-white w-full max-w-3xl rounded-2xl shadow-2xl flex flex-col overflow-hidden max-h-[85vh] border border-gray-200">
+            <div class="px-5 py-3.5 bg-gradient-to-r from-teal-600 to-emerald-600 text-white flex justify-between items-center shrink-0">
                 <div class="flex items-center gap-2.5">
-                    <i class="fas fa-table text-xl text-emerald-600"></i>
+                    <div class="w-8 h-8 rounded-lg bg-white/20 flex items-center justify-center"><i class="fas fa-tasks text-sm"></i></div>
                     <div>
-                        <h3 class="font-display font-black text-base text-emerald-900 leading-tight">Sumber Data Google Sheets</h3>
-                        <p class="text-[10px] font-bold text-emerald-700 uppercase">Kolom B, E, G, H, K, L, AC, AF, AH (READY), AI</p>
+                        <h3 class="font-display font-black text-base tracking-wide uppercase leading-none">Batch Closed (Selesai)</h3>
+                        <p class="text-[10px] text-teal-100 font-bold mt-0.5">Pilih Semua atau centang manual item READY, lalu isi Nama Pengambil satu kali</p>
                     </div>
                 </div>
-                <button onclick="closeModal('modal-gsheet-config')" class="text-gray-400 hover:text-red-500 w-7 h-7 rounded-full border bg-white flex items-center justify-center"><i class="fas fa-times text-xs"></i></button>
+                <button type="button" onclick="closeModal('modal-batch-close')" class="text-white/80 hover:text-white bg-white/10 hover:bg-white/20 rounded-full w-7 h-7 flex items-center justify-center transition"><i class="fas fa-times text-xs"></i></button>
             </div>
-            <div class="p-5 space-y-4 overflow-y-auto max-h-[75vh]">
-                <div>
-                    <label class="label-stylish">Tempel Link Google Sheets (Edit / Publish CSV / Apps Script)</label>
-                    <input type="text" id="gsheet-url-input" class="input-stylish w-full text-xs font-mono" placeholder="https://docs.google.com/spreadsheets/d/.../edit#gid=..." oninput="handleGsheetUrlPaste(this.value)">
-                    <p class="text-[10px] text-gray-400 mt-1">Otomatis mendeteksi Spreadsheet ID, GID tab, atau link Publikasikan ke Web (CSV).</p>
-                </div>
-                <div class="grid grid-cols-3 gap-3">
-                    <div class="col-span-2">
-                        <label class="label-stylish">Spreadsheet ID</label>
-                        <input type="text" id="gsheet-id-input" class="input-stylish w-full text-xs font-mono" placeholder="1OEfUemphqF2fBM55WuchrRUgvLmDSH9vaYZ2TaClr_4">
+
+            <div class="px-5 py-3 bg-gray-50 border-b flex flex-wrap items-center justify-between gap-2 shrink-0">
+                <div class="flex items-center gap-2 flex-1 min-w-[220px]">
+                    <div class="relative flex-1">
+                        <i class="fas fa-search absolute left-3 top-2.5 text-gray-400 text-xs"></i>
+                        <input type="text" id="batch-modal-search" oninput="renderBatchCloseModalList()" placeholder="CARI ASSY / NO BOX / SERIAL WO..." class="pl-8 pr-3 py-1.5 border border-gray-200 rounded-lg text-xs font-bold text-gray-700 w-full bg-white uppercase focus:outline-none focus:border-brand-teal">
                     </div>
-                    <div>
-                        <label class="label-stylish">Sheet GID</label>
-                        <input type="text" id="gsheet-gid-input" class="input-stylish w-full text-xs font-mono" placeholder="408912899">
-                    </div>
+                    <select id="batch-modal-line" onchange="renderBatchCloseModalList()" class="border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs font-bold text-gray-600 bg-white cursor-pointer focus:outline-none">
+                        <option value="ALL">Semua Line</option>
+                        <option value="Line Crimping">Line Crimping</option>
+                        <option value="Line SMV">Line SMV</option>
+                        <option value="Line Proto">Line Proto</option>
+                        <option value="Line HA">Line HA</option>
+                    </select>
                 </div>
-                <div id="gsheet-diag-box" class="bg-gray-50 border border-gray-200 rounded-xl p-3 text-[11px] space-y-1">
-                    <div class="font-black text-gray-600 uppercase text-[10px]"><i class="fas fa-stethoscope mr-1 text-emerald-600"></i>Status Koneksi Terakhir</div>
-                    <div id="gsheet-diag-text" class="text-gray-600 font-medium">Menunggu sinkronisasi...</div>
-                </div>
-                <div class="bg-blue-50 border border-blue-100 rounded-xl p-3 text-[10px] text-blue-800 space-y-1">
-                    <div class="font-black uppercase"><i class="fas fa-info-circle mr-1"></i>Syarat Akses Google Sheets</div>
-                    <div>1. Klik <b>Bagikan (Share)</b> di Google Sheets &rarr; ubah ke <b>Siapa saja yang memiliki link (Viewer)</b>.</div>
-                    <div>2. Atau klik <b>File &rarr; Bagikan &rarr; Publikasikan ke web</b> (format CSV), lalu tempel linknya di kolom atas.</div>
+                <div class="flex items-center gap-2">
+                    <button id="btn-batch-modal-select-all" type="button" onclick="toggleSelectAllInBatchModal()" class="border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 px-3 py-1.5 rounded-lg text-xs font-black transition flex items-center gap-1.5 cursor-pointer">
+                        <i class="far fa-check-square"></i>
+                        <span>Pilih Semua (0)</span>
+                    </button>
+                    <span id="batch-modal-selected-badge" class="bg-teal-50 text-brand-teal border border-teal-200 px-2.5 py-1.5 rounded-lg text-xs font-black">0 Terpilih</span>
                 </div>
             </div>
-            <div class="px-5 py-3.5 border-t bg-gray-50 flex justify-between items-center gap-2">
-                <button onclick="resetGsheetConfig()" class="px-3 py-2 text-[11px] font-bold text-gray-500 hover:bg-gray-200 rounded-lg">Reset Default</button>
-                <div class="flex gap-2">
-                    <button onclick="closeModal('modal-gsheet-config')" class="px-4 py-2 text-xs font-bold text-gray-500 hover:bg-gray-200 rounded-lg">Tutup</button>
-                    <button onclick="saveGsheetConfig()" class="px-5 py-2 text-xs font-black bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg shadow"><i class="fas fa-save mr-1"></i> Simpan & Sync</button>
+
+            <div id="batch-modal-list" class="flex-1 overflow-y-auto p-4 space-y-2 bg-[#f4f7fb] min-h-[240px]"></div>
+
+            <div class="px-5 py-3.5 bg-white border-t flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 shrink-0">
+                <div class="flex-1">
+                    <label class="text-[9px] font-black text-gray-400 uppercase tracking-wider block mb-1">Nama Pengambil (Diisi 1 Kali Untuk Semua Item Terpilih)</label>
+                    <input type="text" id="batch-picker-name-input" class="input-stylish w-full uppercase text-xs font-black" placeholder="KETIK NAMA PENGAMBIL (LEADER / MP)..." onkeypress="if(event.key === 'Enter') submitBatchCloseModal()">
+                </div>
+                <div class="flex items-center gap-2 sm:pt-4">
+                    <button type="button" onclick="closeModal('modal-batch-close')" class="px-4 py-2.5 text-xs font-bold text-gray-500 bg-gray-100 hover:bg-gray-200 rounded-lg transition">Batal</button>
+                    <button id="btn-submit-batch-close" type="button" onclick="submitBatchCloseModal()" class="px-5 py-2.5 bg-brand-teal hover:bg-teal-700 disabled:bg-gray-300 text-white text-xs font-black rounded-lg shadow-md flex items-center gap-1.5 transition cursor-pointer">
+                        <i class="fas fa-check-double"></i>
+                        <span>Selesaikan Terpilih (0)</span>
+                    </button>
                 </div>
             </div>
         </div>
+    </div>
+
+    <!-- Context Menu Klik Kanan History -->
+    <div id="history-context-menu" class="hidden fixed z-[110] bg-white rounded-lg shadow-xl border border-gray-200 py-1 min-w-[175px] select-none">
+        <button id="btn-history-undo-closed" type="button" onclick="confirmUndoClosedFromHistory()" class="w-full px-3.5 py-2 text-left text-xs font-bold text-amber-700 hover:bg-amber-50 flex items-center gap-2 transition cursor-pointer">
+            <i class="fas fa-undo-alt text-amber-600"></i>
+            <span>Undo Closed</span>
+        </button>
     </div>
 
     <script src="app.js"></script>

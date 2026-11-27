@@ -26,8 +26,11 @@ const STATUS_READY = 'READY';
 const STATUS_PICKED_UP = 'PICKED_UP';
 const STATUS_FINISHED = 'FINISHED';
 
+// Sumber Google Sheets dikunci langsung di kode:
+// https://docs.google.com/spreadsheets/d/1OEfUemphqF2fBM55WuchrRUgvLmDSH9vaYZ2TaCIr_4/edit#gid=408912899
 const DEFAULT_GSHEET_CONFIG = {
-    sheetId: '1OEfUemphqF2fBM55WuchrRUgvLmDSH9vaYZ2TaClr_4',
+    url: 'https://docs.google.com/spreadsheets/d/1OEfUemphqF2fBM55WuchrRUgvLmDSH9vaYZ2TaCIr_4/edit#gid=408912899',
+    sheetId: '1OEfUemphqF2fBM55WuchrRUgvLmDSH9vaYZ2TaCIr_4',
     gid: '408912899',
     customUrl: ''
 };
@@ -71,11 +74,11 @@ let cachedHistoryBuckets = {};
 let loadedHistoryData = [];
 
 // ============================================================================
-// KONFIGURASI & MEKANIK BACA DATA GOOGLE SHEETS (KOLOM AH = READY)
-// Kolom: B=Serial WO ID, E=ASSY NO, G=Qty, H=WP, K=Line, L=Lot,
-//        AC=TGL PRINT, AF=PIC, AH=STATUS MARKER, AI=No BOX
+// KONFIGURASI & MEKANIK BACA DATA GOOGLE SHEETS (DETEKSI KOLOM OTOMATIS)
+// Mendukung layout terbaru (AG=PIC, AH=PIC PRD, AI=STATUS MARKER, AJ=No BOX)
+// maupun layout lama (AF=PIC, AH=STATUS MARKER, AI=No BOX) secara otomatis.
 // ============================================================================
-let gsheetConfig = loadLocalGsheetConfig();
+let gsheetConfig = { ...DEFAULT_GSHEET_CONFIG };
 let gsheetFirstSeenMap = loadGsheetFirstSeenMap();
 let completedGsheetSerials = {};
 let gsheetMetaMap = {};
@@ -90,11 +93,14 @@ let lastGsheetDiag = {
     method: '-',
     totalScanned: 0,
     readyCount: 0,
+    detectedCols: '-',
     message: 'Belum dilakukan sinkronisasi.',
     updatedAt: null
 };
 
-// Indeks kolom Excel (0-based): B=1, E=4, G=6, H=7, K=10, L=11, AC=28, AF=31, AH=33, AI=34
+// Indeks kolom fallback (0-based) jika sheet tidak memiliki baris header:
+// B=1, E=4, G=6, H=7, K=10, L=11, Y=24 (Closed Process Date),
+// AC=28 (TGL PRINT), AG=32 (PIC), AI=34 (STATUS MARKER), AJ=35 (No BOX)
 const GSHEET_COL_INDEX = {
     B: 1,
     E: 4,
@@ -102,19 +108,432 @@ const GSHEET_COL_INDEX = {
     H: 7,
     K: 10,
     L: 11,
+    Y: 24,
     AC: 28,
     AF: 31,
+    AG: 32,
     AH: 33,
-    AI: 34
+    AI: 34,
+    AJ: 35
 };
+
+const DEFAULT_FALLBACK_COL_MAP = {
+    serialWO: GSHEET_COL_INDEX.B,
+    assy: GSHEET_COL_INDEX.E,
+    qty: GSHEET_COL_INDEX.G,
+    wp: GSHEET_COL_INDEX.H,
+    line: GSHEET_COL_INDEX.K,
+    lot: GSHEET_COL_INDEX.L,
+    closedDate: GSHEET_COL_INDEX.Y,
+    tglPrint: GSHEET_COL_INDEX.AC,
+    pic: GSHEET_COL_INDEX.AG,
+    status: GSHEET_COL_INDEX.AI,
+    noBox: GSHEET_COL_INDEX.AJ
+};
+
+function colIndexToLetter(index) {
+    if (index === null || index === undefined || index < 0) return '-';
+    let n = index;
+    let letter = '';
+    while (n >= 0) {
+        letter = String.fromCharCode((n % 26) + 65) + letter;
+        n = Math.floor(n / 26) - 1;
+    }
+    return letter;
+}
+
+function normalizeHeaderText(val) {
+    return String(val || '')
+        .replace(/[\r\n]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toUpperCase();
+}
+
+function scoreHeaderForField(field, rawHeader) {
+    const h = normalizeHeaderText(rawHeader);
+    if (!h) return 0;
+
+    switch (field) {
+        case 'status':
+            if (h === 'STATUS MARKER' || h === 'STATUS_MARKER') return 100;
+            if (h.includes('STATUS MARKER') || h.includes('STATUS_MARKER')) return 95;
+            if (h === 'STAT MARKER' || h.includes('STAT MARKER')) return 85;
+            if (h === 'STATUS') return 55;
+            if (h.includes('STATUS') && !h.includes('ORDER') && !h.includes('WO') && !h.includes('PRD')) return 35;
+            return 0;
+
+        case 'pic':
+            // Jangan pernah cocokkan PIC PRD / PIC LINE / PICKER sebagai PIC Gudang/Marker
+            if (/\b(PRD|PROD|PRODUKSI|LINE|LEADER|LDR|PICKER|PENGAMBIL)\b/.test(h)) return 0;
+            if (h === 'PIC' || h === 'PIC MARKER' || h === 'PIC WH' || h === 'PIC GUDANG') return 100;
+            if (h.includes('PIC MARKER') || h.includes('PIC WH') || h.includes('PIC GUDANG')) return 90;
+            if (/\bPIC\b/.test(h)) return 65;
+            return 0;
+
+        case 'noBox':
+            if (h.includes('STATUS') || h.includes('ROOM') || h.includes('RUANG')) return 0;
+            if (h === 'NO BOX' || h === 'NO. BOX' || h === 'NO_BOX' || h === 'NOMOR BOX' || h === 'BOX NO' || h === 'BOX') return 100;
+            if (h.includes('NO BOX') || h.includes('NO. BOX') || h.includes('NOMOR BOX') || h.includes('BOX NO')) return 90;
+            if (/\bBOX\b/.test(h)) return 65;
+            return 0;
+
+        case 'serialWO':
+            if (h === 'SERIAL WO ID' || h === 'SERIAL WO' || h === 'WO ID' || h === 'SERIAL' || h === 'NO SERIAL' || h === 'NO. SERIAL') return 100;
+            if (h.includes('SERIAL WO') || h.includes('WO ID')) return 90;
+            if (/\bSERIAL\b/.test(h)) return 75;
+            if (h === 'NO WO' || h === 'NO. WO' || h === 'WO NO' || h === 'WORK ORDER') return 60;
+            return 0;
+
+        case 'assy':
+            if (h.includes('NAME') || h.includes('NAMA')) return 0;
+            if (h === 'ASSY NO' || h === 'NO ASSY' || h === 'NO. ASSY' || h === 'ASSY NO.' || h === 'ASSY NUMBER' || h === 'ASSY') return 100;
+            if (h.includes('ASSY NO') || h.includes('NO ASSY') || h.includes('NO. ASSY')) return 90;
+            if (/\bASSY\b/.test(h)) return 75;
+            if (h === 'PART NO' || h === 'NO PART') return 40;
+            return 0;
+
+        case 'qty':
+            if (h === 'QTY' || h === 'QTY WO' || h === 'QTY ORDER' || h === 'QTY MARKER' || h === 'QUANTITY') return 100;
+            if (/\bQTY\b/.test(h) || h.includes('QUANTITY')) return 75;
+            if (h === 'JUMLAH' || h === 'JML') return 50;
+            return 0;
+
+        case 'wp':
+            if (h === 'WP' || h === 'W/P' || h === 'NO WP' || h === 'WORKPLACE' || h === 'WORK PLACE') return 100;
+            if (/\bW\/?P\b/.test(h) || h.includes('WORKPLACE') || h.includes('WORK PLACE')) return 75;
+            return 0;
+
+        case 'line':
+            if (h.includes('DEADLINE') || h.includes('TIMELINE') || h.includes('ONLINE')) return 0;
+            if (h === 'LINE' || h === 'PROD LINE' || h === 'LINE PROD' || h === 'PRODUCTION LINE') return 100;
+            if (/\bLINE\b/.test(h)) return 75;
+            return 0;
+
+        case 'lot':
+            if (h === 'LOT' || h === 'LOT NO' || h === 'NO LOT' || h === 'NO. LOT' || h === 'LOT NUMBER') return 100;
+            if (/\bLOT\b/.test(h)) return 75;
+            return 0;
+
+        case 'closedDate':
+            if (h === 'CLOSED PROCESS DATE' || h === 'CLOSE PROCESS DATE') return 100;
+            if (h.includes('CLOSED') && h.includes('DATE')) return 80;
+            return 0;
+
+        case 'tglPrint':
+            if (h === 'TGL PRINT' || h === 'TGL. PRINT' || h === 'TGL.PRINT' || h === 'TANGGAL PRINT' || h === 'PRINT DATE' || h === 'DATE PRINT' || h === 'TGL CETAK') return 100;
+            if ((h.includes('TGL') || h.includes('TANGGAL') || h.includes('DATE')) && (h.includes('PRINT') || h.includes('CETAK'))) return 90;
+            if (h === 'PRINT' || h === 'WAKTU PRINT') return 55;
+            return 0;
+
+        default:
+            return 0;
+    }
+}
+
+function countStatusHitsInColumn(rowCount, getCellAt, colIdx, startRow = 0) {
+    let readyCount = 0;
+    let statusWordCount = 0;
+    for (let r = startRow; r < rowCount; r++) {
+        const val = normalizeHeaderText(getCellAt(r, colIdx));
+        if (!val) continue;
+        if (val === 'READY' || /\bREADY\b/.test(val)) {
+            if (!/\b(BELUM|NOT|TIDAK|UNREADY|NON|CLOSED|CLOSE|OPEN)\b/.test(val)) {
+                readyCount++;
+                statusWordCount++;
+            }
+        } else if (val === 'OPEN' || val === 'CLOSED' || val === 'CLOSE') {
+            statusWordCount++;
+        }
+    }
+    return { readyCount, statusWordCount };
+}
+
+function matchHeaderCandidate(headerCells, dataProbe = null) {
+    const fields = ['status', 'pic', 'noBox', 'serialWO', 'assy', 'qty', 'wp', 'line', 'lot', 'closedDate', 'tglPrint'];
+    const map = {};
+    const scores = {};
+    let totalScore = 0;
+    let matchedCount = 0;
+
+    fields.forEach(field => {
+        if (field === 'status') {
+            const candidates = [];
+            for (let i = 0; i < headerCells.length; i++) {
+                const s = scoreHeaderForField('status', headerCells[i]);
+                if (s > 0) candidates.push({ idx: i, baseScore: s });
+            }
+            if (candidates.length === 0) return;
+
+            let bestCand = candidates[0];
+            let bestRank = -1;
+
+            candidates.forEach(cand => {
+                let rank = cand.baseScore + (cand.idx * 0.01);
+                if (dataProbe && candidates.length > 1) {
+                    const hits = countStatusHitsInColumn(dataProbe.rowCount, dataProbe.getCellAt, cand.idx, dataProbe.startRow);
+                    if (hits.readyCount > 0) rank += 1000 + Math.min(hits.readyCount, 200);
+                    else if (hits.statusWordCount > 0) rank += 500 + Math.min(hits.statusWordCount, 100);
+                }
+                if (rank > bestRank) {
+                    bestRank = rank;
+                    bestCand = cand;
+                }
+            });
+
+            map.status = bestCand.idx;
+            scores.status = bestCand.baseScore;
+            totalScore += bestCand.baseScore;
+            matchedCount++;
+            return;
+        }
+
+        let bestIdx = -1;
+        let bestScore = 0;
+        for (let i = 0; i < headerCells.length; i++) {
+            const s = scoreHeaderForField(field, headerCells[i]);
+            if (s > bestScore) {
+                bestScore = s;
+                bestIdx = i;
+            }
+        }
+        if (bestIdx !== -1 && bestScore > 0) {
+            map[field] = bestIdx;
+            scores[field] = bestScore;
+            totalScore += bestScore;
+            matchedCount++;
+        }
+    });
+
+    return { map, scores, totalScore, matchedCount };
+}
+
+function detectStatusColumnByContent(rowCount, getRowLength, getCellAt, startRow = 0) {
+    const colStats = {};
+
+    for (let r = startRow; r < rowCount; r++) {
+        const len = getRowLength(r);
+        for (let c = 0; c < len; c++) {
+            const val = normalizeHeaderText(getCellAt(r, c));
+            if (!val) continue;
+            if (val === 'READY' || val === 'OPEN' || val === 'CLOSED' || val === 'CLOSE') {
+                if (!colStats[c]) colStats[c] = { ready: 0, statusWord: 0 };
+                colStats[c].statusWord++;
+                if (val === 'READY') colStats[c].ready++;
+            }
+        }
+    }
+
+    let bestCol = -1;
+    let bestWeight = 0;
+    Object.keys(colStats).forEach(colKey => {
+        const c = parseInt(colKey, 10);
+        const st = colStats[c];
+        // Prioritaskan kolom yang memiliki kata READY + OPEN/CLOSED dan berada di area kanan (kolom status)
+        let weight = st.ready * 10 + st.statusWord * 3;
+        if (c >= 25) weight += 5;
+        if (c === GSHEET_COL_INDEX.AI || c === GSHEET_COL_INDEX.AH) weight += 4;
+        if (weight > bestWeight) {
+            bestWeight = weight;
+            bestCol = c;
+        }
+    });
+
+    return bestCol;
+}
+
+function finalizeColumnMap(detectedMap, dataProbe, colLetterLookup) {
+    const finalMap = { ...detectedMap };
+
+    // Jika kolom STATUS MARKER belum ditemukan dari nama header, deteksi dari isi sel (READY/OPEN/CLOSED)
+    if (finalMap.status === undefined && dataProbe) {
+        const inferredStatus = detectStatusColumnByContent(
+            dataProbe.rowCount,
+            dataProbe.getRowLength,
+            dataProbe.getCellAt,
+            dataProbe.startRow
+        );
+        if (inferredStatus !== -1) {
+            finalMap.status = inferredStatus;
+        }
+    }
+
+    // Jika status sudah ditemukan, gunakan posisi relatifnya sebagai fallback cerdas untuk PIC & No BOX
+    if (finalMap.status !== undefined) {
+        if (finalMap.noBox === undefined) {
+            finalMap.noBox = finalMap.status + 1;
+        }
+        if (finalMap.pic === undefined) {
+            if (finalMap.status === GSHEET_COL_INDEX.AI) {
+                finalMap.pic = GSHEET_COL_INDEX.AG;
+            } else if (finalMap.status === GSHEET_COL_INDEX.AH) {
+                finalMap.pic = GSHEET_COL_INDEX.AF;
+            } else if (finalMap.status >= 2) {
+                finalMap.pic = finalMap.status - 2;
+            }
+        }
+    }
+
+    // Isi sisa kolom yang belum terdeteksi menggunakan fallback default
+    Object.keys(DEFAULT_FALLBACK_COL_MAP).forEach(field => {
+        if (finalMap[field] === undefined) {
+            finalMap[field] = DEFAULT_FALLBACK_COL_MAP[field];
+        }
+    });
+
+    const getLabel = (idx) => {
+        if (colLetterLookup && colLetterLookup[idx]) return colLetterLookup[idx];
+        return colIndexToLetter(idx);
+    };
+
+    const colLetters = {
+        serialWO: getLabel(finalMap.serialWO),
+        assy: getLabel(finalMap.assy),
+        noBox: getLabel(finalMap.noBox),
+        tglPrint: getLabel(finalMap.tglPrint),
+        pic: getLabel(finalMap.pic),
+        status: getLabel(finalMap.status)
+    };
+    const summary = `Status:${colLetters.status} | PIC:${colLetters.pic} | Tgl Print:${colLetters.tglPrint} | Box:${colLetters.noBox} | Assy:${colLetters.assy}`;
+    return { colMap: finalMap, colLetters, summary };
+}
+
+function detectColumnMapFromMatrix(matrix) {
+    const scanLimit = Math.min(matrix.length, 15);
+    let bestCandidate = { map: {}, scores: {}, totalScore: 0, matchedCount: 0, rowIdx: -1 };
+
+    for (let r = 0; r < scanLimit; r++) {
+        const row = matrix[r];
+        if (!Array.isArray(row) || row.length < 3) continue;
+        const probe = {
+            rowCount: matrix.length,
+            startRow: r + 1,
+            getRowLength: (ri) => Array.isArray(matrix[ri]) ? matrix[ri].length : 0,
+            getCellAt: (ri, ci) => (Array.isArray(matrix[ri]) && ci < matrix[ri].length) ? matrix[ri][ci] : ''
+        };
+        const cand = matchHeaderCandidate(row, probe);
+        if (cand.matchedCount >= 2 && (cand.totalScore > bestCandidate.totalScore || (cand.totalScore === bestCandidate.totalScore && cand.matchedCount > bestCandidate.matchedCount))) {
+            bestCandidate = { ...cand, rowIdx: r };
+        }
+    }
+
+    const startRow = bestCandidate.rowIdx >= 0 ? bestCandidate.rowIdx + 1 : 0;
+    const fullProbe = {
+        rowCount: matrix.length,
+        startRow,
+        getRowLength: (ri) => Array.isArray(matrix[ri]) ? matrix[ri].length : 0,
+        getCellAt: (ri, ci) => (Array.isArray(matrix[ri]) && ci < matrix[ri].length) ? matrix[ri][ci] : ''
+    };
+    const finalized = finalizeColumnMap(bestCandidate.map, fullProbe, null);
+    return { ...finalized, headerRowIdx: bestCandidate.rowIdx, startRow };
+}
+
+function detectColumnMapFromGvizTable(table) {
+    const cols = (table && Array.isArray(table.cols)) ? table.cols : [];
+    const rows = (table && Array.isArray(table.rows)) ? table.rows : [];
+
+    const colLetterLookup = cols.map((col, pos) => (col && col.id) ? String(col.id).trim().toUpperCase() : colIndexToLetter(pos));
+    const colLabels = cols.map(col => (col && col.label) ? String(col.label) : '');
+    const getGvizCell = (ri, ci) => {
+        const r = rows[ri];
+        return (r && Array.isArray(r.c) && ci < r.c.length) ? getCellText(r.c[ci]) : '';
+    };
+    const getGvizRowLen = (ri) => {
+        const r = rows[ri];
+        return (r && Array.isArray(r.c)) ? r.c.length : 0;
+    };
+
+    const labelProbe = {
+        rowCount: rows.length,
+        startRow: 0,
+        getRowLength: getGvizRowLen,
+        getCellAt: getGvizCell
+    };
+    const labelCand = matchHeaderCandidate(colLabels, labelProbe);
+
+    // Periksa 15 baris pertama jika header berada di dalam rows[]
+    const rowScanLimit = Math.min(rows.length, 15);
+    let bestRowCand = { map: {}, scores: {}, totalScore: 0, matchedCount: 0, rowIdx: -1 };
+
+    for (let r = 0; r < rowScanLimit; r++) {
+        const rowCells = (rows[r] && Array.isArray(rows[r].c)) ? rows[r].c.map(cell => getCellText(cell)) : [];
+        if (rowCells.length < 3) continue;
+        const rowProbe = {
+            rowCount: rows.length,
+            startRow: r + 1,
+            getRowLength: getGvizRowLen,
+            getCellAt: getGvizCell
+        };
+        const cand = matchHeaderCandidate(rowCells, rowProbe);
+        if (cand.matchedCount >= 2 && (cand.totalScore > bestRowCand.totalScore || (cand.totalScore === bestRowCand.totalScore && cand.matchedCount > bestRowCand.matchedCount))) {
+            bestRowCand = { ...cand, rowIdx: r };
+        }
+    }
+
+    // Gabungkan deteksi dari cols[].label dan baris header terbaik
+    const mergedMap = {};
+    let headerRowIdx = -1;
+    if (bestRowCand.totalScore > labelCand.totalScore) {
+        headerRowIdx = bestRowCand.rowIdx;
+        Object.assign(mergedMap, labelCand.map, bestRowCand.map);
+    } else {
+        Object.assign(mergedMap, bestRowCand.map, labelCand.map);
+        if (bestRowCand.matchedCount >= 3 && bestRowCand.map.status !== undefined && bestRowCand.rowIdx <= 5) {
+            headerRowIdx = bestRowCand.rowIdx;
+        }
+    }
+
+    // Pemetaan fallback menggunakan col.id (huruf Excel asli di metadata GViz) jika sebagian kolom tidak punya label
+    const colIdToPos = {};
+    colLetterLookup.forEach((letter, pos) => {
+        if (letter) colIdToPos[letter] = pos;
+    });
+
+    const startRow = headerRowIdx >= 0 ? headerRowIdx + 1 : 0;
+    const fullProbe = {
+        rowCount: rows.length,
+        startRow,
+        getRowLength: getGvizRowLen,
+        getCellAt: getGvizCell
+    };
+    const finalized = finalizeColumnMap(mergedMap, fullProbe, colLetterLookup);
+
+    // Pastikan jika ada field yang jatuh ke default index, cocokkan dengan colIdToPos jika tersedia
+    const defaultLetters = {
+        serialWO: 'B', assy: 'E', qty: 'G', wp: 'H', line: 'K', lot: 'L', closedDate: 'Y', tglPrint: 'AC'
+    };
+    Object.keys(defaultLetters).forEach(field => {
+        if (mergedMap[field] === undefined && colIdToPos[defaultLetters[field]] !== undefined) {
+            finalized.colMap[field] = colIdToPos[defaultLetters[field]];
+        }
+    });
+
+    const getLabel = (idx) => colLetterLookup[idx] || colIndexToLetter(idx);
+    finalized.colLetters = {
+        serialWO: getLabel(finalized.colMap.serialWO),
+        assy: getLabel(finalized.colMap.assy),
+        noBox: getLabel(finalized.colMap.noBox),
+        tglPrint: getLabel(finalized.colMap.tglPrint),
+        pic: getLabel(finalized.colMap.pic),
+        status: getLabel(finalized.colMap.status)
+    };
+    finalized.summary = `Status:${finalized.colLetters.status} | PIC:${finalized.colLetters.pic} | Tgl Print:${finalized.colLetters.tglPrint} | Box:${finalized.colLetters.noBox} | Assy:${finalized.colLetters.assy}`;
+
+    return { ...finalized, headerRowIdx, startRow };
+}
 
 function loadLocalGsheetConfig() {
     try {
         const raw = localStorage.getItem(GSHEET_CONFIG_STORAGE_KEY);
         if (raw) {
             const parsed = JSON.parse(raw);
+            let savedId = String(parsed.sheetId || DEFAULT_GSHEET_CONFIG.sheetId).trim();
+            // Perbaiki otomatis typo lama (l kecil -> I besar) yang tersimpan di localStorage
+            if (savedId === '1OEfUemphqF2fBM55WuchrRUgvLmDSH9vaYZ2TaClr_4') {
+                savedId = DEFAULT_GSHEET_CONFIG.sheetId;
+            }
             return {
-                sheetId: String(parsed.sheetId || DEFAULT_GSHEET_CONFIG.sheetId).trim(),
+                sheetId: savedId,
                 gid: String(parsed.gid ?? DEFAULT_GSHEET_CONFIG.gid).trim(),
                 customUrl: String(parsed.customUrl || '').trim()
             };
@@ -165,10 +584,11 @@ function getCellText(cell) {
 }
 
 function isStatusReady(rawStatus) {
-    const upper = String(rawStatus || '').trim().toUpperCase();
+    const upper = normalizeHeaderText(rawStatus);
     if (!upper) return false;
-    if (upper === 'STATUS' || upper === 'STATUS MARKER') return false;
-    if (/\b(BELUM|NOT|TIDAK|UNREADY|NON)\b/.test(upper)) return false;
+    if (upper === 'STATUS' || upper === 'STATUS MARKER' || upper === 'STATUS_MARKER') return false;
+    // Pastikan status CLOSED / DONE / OPEN / BELUM READY selalu terhapus dari Active Queue
+    if (/\b(BELUM|NOT|TIDAK|UNREADY|NON|CLOSED|CLOSE|DONE|OPEN)\b/.test(upper)) return false;
     return upper === 'READY' || /\bREADY\b/.test(upper);
 }
 
@@ -188,15 +608,81 @@ function mapGsheetLine(rawLine) {
     const upper = String(rawLine || '').trim().toUpperCase();
     if (upper.includes('EXPORT') || upper.includes('EXP') || upper.includes('CRIMPING')) return 'Line Crimping';
     if (upper.includes('SVREG') || upper.includes('SMV')) return 'Line SMV';
-    if (upper.includes('PROTO')) return 'Line Proto';
+    if (upper.includes('PROTO') || upper === 'PT' || /\bPT\b/.test(upper)) return 'Line Proto';
     if (upper.includes('HA')) return 'Line HA';
     return 'Line Crimping';
 }
 
-function parseGsheetDate(cellOrStr, safeKey) {
-    const fallbackTs = getStableFallbackTimestamp(safeKey);
+const SHORT_MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function formatGsheetDateLabel(dt) {
+    if (!dt || isNaN(dt.getTime())) return '-';
+    const d = String(dt.getDate()).padStart(2, '0');
+    const m = SHORT_MONTH_LABELS[dt.getMonth()] || 'Jan';
+    const y = dt.getFullYear();
+    return `${d} ${m} ${y}`;
+}
+
+function normalizeGsheetYear(rawYearStr, fallbackYear) {
+    if (!rawYearStr) return fallbackYear;
+    const digits = String(rawYearStr).replace(/\D/g, '');
+    if (!digits) return fallbackYear;
+    if (digits.length === 2) return 2000 + parseInt(digits, 10);
+    if (digits.length === 4) return parseInt(digits, 10);
+    if (digits.length === 5) {
+        // Perbaiki typo 5-digit seperti "20256" -> 2026 atau "22026" -> 2026
+        if (digits.startsWith('202')) return parseInt('202' + digits.slice(-1), 10);
+        if (digits.startsWith('220')) return parseInt(digits.slice(1), 10);
+        return parseInt(digits.slice(0, 4), 10);
+    }
+    return parseInt(digits.slice(-4), 10) || fallbackYear;
+}
+
+function extractDateFromSerialWO(serialWO) {
+    const m = String(serialWO || '').match(/(\d{2})(\d{2})(\d{2})-[A-Z0-9]+$/);
+    if (!m) return null;
+    const d = parseInt(m[1], 10);
+    const mo = parseInt(m[2], 10);
+    const yr = 2000 + parseInt(m[3], 10);
+    if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31) {
+        const dt = new Date(yr, mo - 1, d);
+        if (!isNaN(dt.getTime())) return dt;
+    }
+    return null;
+}
+
+function normalizeNoBoxText(rawBox) {
+    return getCellText(rawBox)
+        .replace(/\(\s+/g, '(')
+        .replace(/\s+\)/g, ')')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toUpperCase();
+}
+
+function parseGsheetDate(cellOrStr, safeKey, options = {}) {
+    const serialDate = options.serialWO ? extractDateFromSerialWO(options.serialWO) : null;
+    const fallbackYear = options.fallbackYear || (serialDate ? serialDate.getFullYear() : new Date().getFullYear());
+
+    // Tentukan timestamp cadangan kronologis jika TGL PRINT kosong:
+    // Closed Process Date (jika valid) -> tanggal dari Serial WO -> first-seen stabil
+    let chronoFallbackTs = null;
+    if (options.closedDateCell) {
+        const closedParsed = parseGsheetDate(options.closedDateCell, safeKey + '_closed', {
+            fallbackYear,
+            skipFallbackLookup: true
+        });
+        if (closedParsed && closedParsed.hasExplicitDate) {
+            chronoFallbackTs = closedParsed.ts;
+        }
+    }
+    if (!chronoFallbackTs && serialDate) {
+        chronoFallbackTs = serialDate.getTime();
+    }
+    const fallbackTs = chronoFallbackTs || (options.skipFallbackLookup ? Date.now() : getStableFallbackTimestamp(safeKey));
+
     if (cellOrStr === null || cellOrStr === undefined) {
-        return { ts: fallbackTs, label: '-' };
+        return { ts: fallbackTs, label: '-', hasExplicitDate: false };
     }
 
     const isObj = typeof cellOrStr === 'object';
@@ -205,18 +691,11 @@ function parseGsheetDate(cellOrStr, safeKey) {
         ? (cellOrStr.f ? String(cellOrStr.f).trim() : (rawV !== null && rawV !== undefined ? String(rawV).trim() : '-'))
         : (String(cellOrStr).trim() || '-');
 
-    // Format Google Visualization: Date(2026,10,26) atau Date(2026,10,26,8,30,0)
-    if (typeof rawV === 'string' && rawV.startsWith('Date(') && rawV.endsWith(')')) {
-        const parts = rawV.slice(5, -1).split(',').map(n => parseInt(n.trim(), 10));
-        if (parts.length >= 3 && !isNaN(parts[0]) && !isNaN(parts[1]) && !isNaN(parts[2])) {
-            const dt = new Date(parts[0], parts[1], parts[2], parts[3] || 0, parts[4] || 0, parts[5] || 0);
-            if (!isNaN(dt.getTime())) return { ts: dt.getTime(), label: label || dt.toLocaleDateString('id-ID') };
-        }
-    }
-
     if (label && label !== '-') {
+        const cleanLabel = label.replace(/\s+/g, ' ').trim();
+
         // 1. Format ISO YYYY-MM-DD [HH:mm[:ss]]
-        const isoMatch = label.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})(?:[\sT](\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/);
+        const isoMatch = cleanLabel.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})(?:[\sT](\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/);
         if (isoMatch) {
             const dt = new Date(
                 parseInt(isoMatch[1], 10),
@@ -226,15 +705,15 @@ function parseGsheetDate(cellOrStr, safeKey) {
                 parseInt(isoMatch[5] || '0', 10),
                 parseInt(isoMatch[6] || '0', 10)
             );
-            if (!isNaN(dt.getTime())) return { ts: dt.getTime(), label };
+            if (!isNaN(dt.getTime())) return { ts: dt.getTime(), label: formatGsheetDateLabel(dt), hasExplicitDate: true };
         }
 
         // 2. Format Indonesia DD/MM/YYYY atau DD-MM-YYYY [+ jam opsional]
-        const dmyMatch = label.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})(?:\s+(\d{1,2})[:.](\d{1,2})(?:[:.](\d{1,2}))?)?/);
+        const dmyMatch = cleanLabel.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,5})(?:\s+(\d{1,2})[:.](\d{1,2})(?:[:.](\d{1,2}))?)?/);
         if (dmyMatch) {
             let d = parseInt(dmyMatch[1], 10);
             let m = parseInt(dmyMatch[2], 10);
-            const yr = dmyMatch[3].length === 2 ? 2000 + parseInt(dmyMatch[3], 10) : parseInt(dmyMatch[3], 10);
+            const yr = normalizeGsheetYear(dmyMatch[3], fallbackYear);
             // Jika angka kedua > 12, berarti MM/DD/YYYY (format US)
             if (m > 12 && d <= 12) {
                 const tmp = d;
@@ -249,30 +728,52 @@ function parseGsheetDate(cellOrStr, safeKey) {
                 parseInt(dmyMatch[5] || '0', 10),
                 parseInt(dmyMatch[6] || '0', 10)
             );
-            if (!isNaN(dt.getTime())) return { ts: dt.getTime(), label };
+            if (!isNaN(dt.getTime())) return { ts: dt.getTime(), label: formatGsheetDateLabel(dt), hasExplicitDate: true };
         }
 
-        // 3. Format DD-Mon-YYYY atau DD Mon YYYY (ID & EN)
+        // 3. Format DD-Mon-YYYY, DD Mon YYYY, 16Sep 2026, 23 Sep2026, 05 Nov, 10 Sep 20256 (ID & EN)
         const monthMap = {
             JAN: 0, FEB: 1, MAR: 2, APR: 3, MAY: 4, MEI: 4, JUN: 5, JUL: 6,
             AUG: 7, AGT: 7, AGU: 7, SEP: 8, OCT: 9, OKT: 9, NOV: 10, DEC: 11, DES: 11
         };
-        const monMatch = label.match(/^(\d{1,2})[\s\-\/]([A-Za-z]{3,})[\s\-\/](\d{2,4})/);
+        const monMatch = cleanLabel.match(/^(\d{1,2})[\s\-\/.,]*([A-Za-z]{3,})[\s\-\/.,]*(\d{2,5})?(?:\s+(\d{1,2})[:.](\d{1,2})(?:[:.](\d{1,2}))?)?/);
         if (monMatch) {
             const monKey = monMatch[2].slice(0, 3).toUpperCase();
             if (monthMap[monKey] !== undefined) {
-                const yr = monMatch[3].length === 2 ? 2000 + parseInt(monMatch[3], 10) : parseInt(monMatch[3], 10);
-                const dt = new Date(yr, monthMap[monKey], parseInt(monMatch[1], 10));
-                if (!isNaN(dt.getTime())) return { ts: dt.getTime(), label };
+                const yr = normalizeGsheetYear(monMatch[3], fallbackYear);
+                const dt = new Date(
+                    yr,
+                    monthMap[monKey],
+                    parseInt(monMatch[1], 10),
+                    parseInt(monMatch[4] || '0', 10),
+                    parseInt(monMatch[5] || '0', 10),
+                    parseInt(monMatch[6] || '0', 10)
+                );
+                if (!isNaN(dt.getTime())) return { ts: dt.getTime(), label: formatGsheetDateLabel(dt), hasExplicitDate: true };
             }
         }
 
-        // 4. Fallback Date.parse umum
-        const parsed = Date.parse(label);
-        if (!isNaN(parsed)) return { ts: parsed, label };
+        // 4. Fallback Date.parse umum (hanya jika string mengandung tahun eksplisit 4 digit agar "05 Nov" tidak jadi 2001)
+        if (/^\D*\d{1,2}\D+\d{4}(?:\D|$)/.test(cleanLabel) || /\b\d{4}\b/.test(cleanLabel)) {
+            const parsed = Date.parse(cleanLabel);
+            if (!isNaN(parsed)) {
+                const dt = new Date(parsed);
+                return { ts: parsed, label: formatGsheetDateLabel(dt), hasExplicitDate: true };
+            }
+        }
     }
 
-    return { ts: fallbackTs, label: label || '-' };
+    // Format Google Visualization: Date(2026,10,26) atau Date(2026,10,26,8,30,0)
+    if (typeof rawV === 'string' && rawV.startsWith('Date(') && rawV.endsWith(')')) {
+        const parts = rawV.slice(5, -1).split(',').map(n => parseInt(n.trim(), 10));
+        if (parts.length >= 3 && !isNaN(parts[0]) && !isNaN(parts[1]) && !isNaN(parts[2])) {
+            const yr = normalizeGsheetYear(String(parts[0]), fallbackYear);
+            const dt = new Date(yr, parts[1], parts[2], parts[3] || 0, parts[4] || 0, parts[5] || 0);
+            if (!isNaN(dt.getTime())) return { ts: dt.getTime(), label: formatGsheetDateLabel(dt), hasExplicitDate: true };
+        }
+    }
+
+    return { ts: fallbackTs, label: label || '-', hasExplicitDate: false };
 }
 
 function parseCSV(text) {
@@ -381,13 +882,16 @@ function extractGsheetFromUrl(rawInput) {
     return null;
 }
 
-function buildParsedReadyRow(fields, idx) {
+function buildParsedReadyRow(fields, idx, colLetters = null) {
     const statusMarker = getCellText(fields.status);
     if (!isStatusReady(statusMarker)) return null;
 
     const serialWO = getCellText(fields.serialWO).toUpperCase();
-    const assy = getCellText(fields.assy).toUpperCase();
-    if (!assy || assy === 'ASSY NO' || assy === 'NO ASSY' || assy === 'ASSY') return null;
+    const rawAssy = getCellText(fields.assy).toUpperCase();
+    if (rawAssy === 'ASSY NO' || rawAssy === 'NO ASSY' || rawAssy === 'NO. ASSY' || rawAssy === 'ASSY') return null;
+
+    const assy = rawAssy || serialWO;
+    if (!assy) return null;
 
     const qtyVal = parseGsheetQty(fields.qty);
     const wp = getCellText(fields.wp).toUpperCase();
@@ -395,14 +899,19 @@ function buildParsedReadyRow(fields, idx) {
     const mappedLine = mapGsheetLine(rawLine);
     const lot = getCellText(fields.lot).toUpperCase();
     const picWh = getCellText(fields.pic).toUpperCase() || '-';
-    const noBox = getCellText(fields.noBox).toUpperCase();
+    const noBox = normalizeNoBoxText(fields.noBox);
 
     const effectiveSerial = serialWO || `GS-${assy}-${wp}-${qtyVal}-${lot}-${noBox}-${idx}`;
-    const safeKey = sanitizeFirebaseKey(effectiveSerial);
-    const tglPrintObj = parseGsheetDate(fields.tglPrint, safeKey);
+    const legacySafeKey = sanitizeFirebaseKey(effectiveSerial);
+    const safeKey = sanitizeFirebaseKey(`${effectiveSerial}__${assy}__${wp || '-'}`);
+    const tglPrintObj = parseGsheetDate(fields.tglPrint, safeKey, {
+        serialWO: effectiveSerial,
+        closedDateCell: fields.closedDate
+    });
 
     return {
         safeKey,
+        legacySafeKey,
         serialWO: effectiveSerial,
         assy,
         qty: qtyVal,
@@ -412,95 +921,85 @@ function buildParsedReadyRow(fields, idx) {
         lot,
         tglPrintTs: tglPrintObj.ts,
         tglPrintLabel: tglPrintObj.label,
+        hasTglPrint: !!tglPrintObj.hasExplicitDate,
         picWh,
-        noBox
+        noBox,
+        colLetters: colLetters || {
+            serialWO: 'B',
+            assy: 'E',
+            noBox: 'AJ',
+            tglPrint: 'AC',
+            pic: 'AG',
+            status: 'AI'
+        }
     };
 }
 
-function extractRowsFromGvizTable(table, isProjectedQuery) {
+function extractRowsFromGvizTable(table) {
     const rows = (table && Array.isArray(table.rows)) ? table.rows : [];
-    const cols = (table && Array.isArray(table.cols)) ? table.cols : [];
     const parsedRows = [];
+    const { colMap, colLetters, summary, startRow } = detectColumnMapFromGvizTable(table);
 
-    if (isProjectedQuery) {
-        // Urutan SELECT: 0:B, 1:E, 2:G, 3:H, 4:K, 5:L, 6:AC, 7:AF, 8:AH, 9:AI
-        rows.forEach((r, idx) => {
-            if (!r || !Array.isArray(r.c)) return;
-            const c = r.c;
-            const item = buildParsedReadyRow({
-                serialWO: c[0],
-                assy: c[1],
-                qty: c[2],
-                wp: c[3],
-                line: c[4],
-                lot: c[5],
-                tglPrint: c[6],
-                pic: c[7],
-                status: c[8],
-                noBox: c[9]
-            }, idx);
-            if (item) parsedRows.push(item);
-        });
-        return { totalScanned: rows.length, parsedRows };
-    }
-
-    // Pemetaan berdasarkan huruf kolom Excel dari metadata cols[].id (kebal terhadap kolom kosong/terpotong)
-    const colIdToPos = {};
-    cols.forEach((col, pos) => {
-        if (col && col.id) {
-            colIdToPos[String(col.id).trim().toUpperCase()] = pos;
-        }
-    });
-
-    const pickCell = (c, letter) => {
-        if (colIdToPos[letter] !== undefined) return c[colIdToPos[letter]];
-        const fallbackIdx = GSHEET_COL_INDEX[letter];
-        return (fallbackIdx !== undefined && fallbackIdx < c.length) ? c[fallbackIdx] : null;
+    const pick = (c, field) => {
+        const idx = colMap[field];
+        return (idx !== undefined && idx >= 0 && idx < c.length) ? c[idx] : null;
     };
 
-    rows.forEach((r, idx) => {
-        if (!r || !Array.isArray(r.c)) return;
+    for (let idx = startRow; idx < rows.length; idx++) {
+        const r = rows[idx];
+        if (!r || !Array.isArray(r.c)) continue;
         const c = r.c;
         const item = buildParsedReadyRow({
-            serialWO: pickCell(c, 'B'),
-            assy: pickCell(c, 'E'),
-            qty: pickCell(c, 'G'),
-            wp: pickCell(c, 'H'),
-            line: pickCell(c, 'K'),
-            lot: pickCell(c, 'L'),
-            tglPrint: pickCell(c, 'AC'),
-            pic: pickCell(c, 'AF'),
-            status: pickCell(c, 'AH'),
-            noBox: pickCell(c, 'AI')
-        }, idx);
+            serialWO: pick(c, 'serialWO'),
+            assy: pick(c, 'assy'),
+            qty: pick(c, 'qty'),
+            wp: pick(c, 'wp'),
+            line: pick(c, 'line'),
+            lot: pick(c, 'lot'),
+            closedDate: pick(c, 'closedDate'),
+            tglPrint: pick(c, 'tglPrint'),
+            pic: pick(c, 'pic'),
+            status: pick(c, 'status'),
+            noBox: pick(c, 'noBox')
+        }, idx, colLetters);
         if (item) parsedRows.push(item);
-    });
+    }
 
-    return { totalScanned: rows.length, parsedRows };
+    return { totalScanned: rows.length, parsedRows, detectedCols: summary };
 }
 
 function extractRowsFromMatrix(matrix) {
     const parsedRows = [];
-    if (!Array.isArray(matrix)) return { totalScanned: 0, parsedRows };
+    if (!Array.isArray(matrix) || matrix.length === 0) {
+        return { totalScanned: 0, parsedRows, detectedCols: '-' };
+    }
 
-    matrix.forEach((row, idx) => {
-        if (!Array.isArray(row) || row.length <= GSHEET_COL_INDEX.AH) return;
+    const { colMap, colLetters, summary, startRow } = detectColumnMapFromMatrix(matrix);
+    const pick = (row, field) => {
+        const idx = colMap[field];
+        return (idx !== undefined && idx >= 0 && idx < row.length) ? row[idx] : '';
+    };
+
+    for (let idx = startRow; idx < matrix.length; idx++) {
+        const row = matrix[idx];
+        if (!Array.isArray(row) || row.length <= colMap.status) continue;
         const item = buildParsedReadyRow({
-            serialWO: row[GSHEET_COL_INDEX.B],
-            assy: row[GSHEET_COL_INDEX.E],
-            qty: row[GSHEET_COL_INDEX.G],
-            wp: row[GSHEET_COL_INDEX.H],
-            line: row[GSHEET_COL_INDEX.K],
-            lot: row[GSHEET_COL_INDEX.L],
-            tglPrint: row[GSHEET_COL_INDEX.AC],
-            pic: row[GSHEET_COL_INDEX.AF],
-            status: row[GSHEET_COL_INDEX.AH],
-            noBox: row[GSHEET_COL_INDEX.AI]
-        }, idx);
+            serialWO: pick(row, 'serialWO'),
+            assy: pick(row, 'assy'),
+            qty: pick(row, 'qty'),
+            wp: pick(row, 'wp'),
+            line: pick(row, 'line'),
+            lot: pick(row, 'lot'),
+            closedDate: pick(row, 'closedDate'),
+            tglPrint: pick(row, 'tglPrint'),
+            pic: pick(row, 'pic'),
+            status: pick(row, 'status'),
+            noBox: pick(row, 'noBox')
+        }, idx, colLetters);
         if (item) parsedRows.push(item);
-    });
+    }
 
-    return { totalScanned: matrix.length, parsedRows };
+    return { totalScanned: matrix.length, parsedRows, detectedCols: summary };
 }
 
 function extractRowsFromAppsScriptJson(json) {
@@ -520,7 +1019,7 @@ function extractRowsFromAppsScriptJson(json) {
             }
             const lowerKeys = Object.keys(obj);
             for (const k of keys) {
-                const found = lowerKeys.find(lk => lk.toLowerCase().trim() === k.toLowerCase());
+                const found = lowerKeys.find(lk => normalizeHeaderText(lk) === normalizeHeaderText(k));
                 if (found && obj[found] !== undefined && obj[found] !== null) return obj[found];
             }
             return '';
@@ -533,15 +1032,16 @@ function extractRowsFromAppsScriptJson(json) {
             wp: getVal('wp', 'WP', 'W/P', 'H'),
             line: getVal('line', 'Line', 'LINE', 'K'),
             lot: getVal('lot', 'Lot', 'LOT', 'L'),
+            closedDate: getVal('closedDate', 'Closed Process Date', 'Y'),
             tglPrint: getVal('tglPrint', 'TGL PRINT', 'Tgl Print', 'AC'),
-            pic: getVal('pic', 'PIC', 'PIC WH', 'AF'),
-            status: getVal('status', 'STATUS MARKER', 'Status Marker', 'AH'),
-            noBox: getVal('noBox', 'No BOX', 'NO BOX', 'BOX', 'AI')
+            pic: getVal('pic', 'PIC', 'PIC MARKER', 'PIC WH', 'AG', 'AF'),
+            status: getVal('status', 'STATUS MARKER', 'Status Marker', 'AI', 'AH'),
+            noBox: getVal('noBox', 'No BOX', 'NO BOX', 'BOX', 'AJ', 'AI')
         }, idx);
         if (item) parsedRows.push(item);
     });
 
-    return { totalScanned: list.length, parsedRows };
+    return { totalScanned: list.length, parsedRows, detectedCols: 'JSON Keys' };
 }
 
 function parseGvizJsonResponseText(text) {
@@ -584,16 +1084,6 @@ async function fetchTextWithTimeout(url, timeoutMs = 15000) {
     }
 }
 
-async function fetchGsheetViaGvizQuery(sheetId, gid, includeColAI = true) {
-    const cols = includeColAI
-        ? 'B, E, G, H, K, L, AC, AF, AH, AI'
-        : 'B, E, G, H, K, L, AC, AF, AH';
-    const tq = encodeURIComponent(`SELECT ${cols} WHERE lower(AH) contains 'ready'`);
-    const url = `https://docs.google.com/spreadsheets/d/${encodeURIComponent(sheetId)}/gviz/tq?gid=${encodeURIComponent(gid)}&tqx=out:json&tq=${tq}&_=${Date.now()}`;
-    const text = await fetchTextWithTimeout(url, 15000);
-    return parseGvizJsonResponseText(text);
-}
-
 async function fetchGsheetViaGvizCsv(sheetId, gid) {
     const url = `https://docs.google.com/spreadsheets/d/${encodeURIComponent(sheetId)}/gviz/tq?tqx=out:csv&gid=${encodeURIComponent(gid)}&_=${Date.now()}`;
     const text = await fetchTextWithTimeout(url, 15000);
@@ -622,10 +1112,10 @@ async function fetchGsheetViaGvizFullJson(sheetId, gid) {
         const detail = (json && json.errors && json.errors[0] && (json.errors[0].detailed_message || json.errors[0].message)) || 'GViz Error';
         throw new Error(detail);
     }
-    return extractRowsFromGvizTable(json.table, false);
+    return extractRowsFromGvizTable(json.table);
 }
 
-function fetchGsheetViaJsonp(sheetId, gid, useFilteredQuery = false, includeColAI = true) {
+function fetchGsheetViaJsonp(sheetId, gid) {
     return new Promise((resolve, reject) => {
         const cbName = '__gsheetCb_' + Date.now() + '_' + Math.floor(Math.random() * 100000);
         const scriptId = 'gsheet-jsonp-' + cbName;
@@ -652,14 +1142,7 @@ function fetchGsheetViaJsonp(sheetId, gid, useFilteredQuery = false, includeColA
             resolve(response);
         };
 
-        let url = `https://docs.google.com/spreadsheets/d/${encodeURIComponent(sheetId)}/gviz/tq?gid=${encodeURIComponent(gid)}&tqx=out:json;responseHandler:${cbName}&_=${Date.now()}`;
-        if (useFilteredQuery) {
-            const cols = includeColAI
-                ? 'B, E, G, H, K, L, AC, AF, AH, AI'
-                : 'B, E, G, H, K, L, AC, AF, AH';
-            const tq = encodeURIComponent(`SELECT ${cols} WHERE lower(AH) contains 'ready'`);
-            url += `&tq=${tq}`;
-        }
+        const url = `https://docs.google.com/spreadsheets/d/${encodeURIComponent(sheetId)}/gviz/tq?gid=${encodeURIComponent(gid)}&tqx=out:json;responseHandler:${cbName}&_=${Date.now()}`;
 
         const script = document.createElement('script');
         script.id = scriptId;
@@ -689,7 +1172,7 @@ async function fetchGsheetFromCustomUrl(customUrl) {
     if (trimmed.includes('google.visualization.Query.setResponse')) {
         const json = parseGvizJsonResponseText(trimmed);
         if (json.status === 'error') throw new Error('GVIZ_ERROR');
-        return { method: 'Custom GViz JSON', ...extractRowsFromGvizTable(json.table, false) };
+        return { method: 'Custom GViz JSON', ...extractRowsFromGvizTable(json.table) };
     }
 
     if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
@@ -706,7 +1189,6 @@ function setGsheetStatusUI(state, labelText) {
     const icon = document.getElementById('gsheet-sync-icon');
     const txt = document.getElementById('gsheet-sync-text');
     const btn = document.getElementById('btn-gsheet-sync');
-    const cfgBtn = document.getElementById('btn-gsheet-config');
 
     if (txt && labelText !== undefined) txt.textContent = labelText;
 
@@ -714,20 +1196,16 @@ function setGsheetStatusUI(state, labelText) {
         if (icon) icon.className = 'fas fa-sync fa-spin text-emerald-600';
     } else if (state === 'ok') {
         if (icon) icon.className = 'fas fa-table text-emerald-600';
-        if (btn) btn.className = 'flex items-center gap-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-2.5 py-1 rounded-l-full border border-emerald-200 text-[10px] font-black transition cursor-pointer';
-        if (cfgBtn) cfgBtn.className = 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-2 py-1 rounded-r-full border border-l-0 border-emerald-200 text-[10px] font-black transition cursor-pointer';
+        if (btn) btn.className = 'flex items-center gap-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-2.5 py-1 rounded-full border border-emerald-200 text-[10px] font-black transition cursor-pointer';
     } else if (state === 'warn') {
         if (icon) icon.className = 'fas fa-exclamation-circle text-orange-500';
-        if (btn) btn.className = 'flex items-center gap-1.5 bg-orange-50 hover:bg-orange-100 text-orange-700 px-2.5 py-1 rounded-l-full border border-orange-200 text-[10px] font-black transition cursor-pointer';
-        if (cfgBtn) cfgBtn.className = 'bg-orange-50 hover:bg-orange-100 text-orange-700 px-2 py-1 rounded-r-full border border-l-0 border-orange-200 text-[10px] font-black transition cursor-pointer';
+        if (btn) btn.className = 'flex items-center gap-1.5 bg-orange-50 hover:bg-orange-100 text-orange-700 px-2.5 py-1 rounded-full border border-orange-200 text-[10px] font-black transition cursor-pointer';
     } else if (state === 'locked') {
         if (icon) icon.className = 'fas fa-lock text-red-500';
-        if (btn) btn.className = 'flex items-center gap-1.5 bg-red-50 hover:bg-red-100 text-red-700 px-2.5 py-1 rounded-l-full border border-red-200 text-[10px] font-black transition cursor-pointer';
-        if (cfgBtn) cfgBtn.className = 'bg-red-50 hover:bg-red-100 text-red-700 px-2 py-1 rounded-r-full border border-l-0 border-red-200 text-[10px] font-black transition cursor-pointer';
+        if (btn) btn.className = 'flex items-center gap-1.5 bg-red-50 hover:bg-red-100 text-red-700 px-2.5 py-1 rounded-full border border-red-200 text-[10px] font-black transition cursor-pointer';
     } else {
         if (icon) icon.className = 'fas fa-exclamation-triangle text-red-500';
-        if (btn) btn.className = 'flex items-center gap-1.5 bg-red-50 hover:bg-red-100 text-red-700 px-2.5 py-1 rounded-l-full border border-red-200 text-[10px] font-black transition cursor-pointer';
-        if (cfgBtn) cfgBtn.className = 'bg-red-50 hover:bg-red-100 text-red-700 px-2 py-1 rounded-r-full border border-l-0 border-red-200 text-[10px] font-black transition cursor-pointer';
+        if (btn) btn.className = 'flex items-center gap-1.5 bg-red-50 hover:bg-red-100 text-red-700 px-2.5 py-1 rounded-full border border-red-200 text-[10px] font-black transition cursor-pointer';
     }
 }
 
@@ -736,23 +1214,49 @@ function updateGsheetDiagUI() {
     if (!diagEl) return;
     const timeStr = lastGsheetDiag.updatedAt ? new Date(lastGsheetDiag.updatedAt).toLocaleTimeString('id-ID') : '-';
     const statusColor = lastGsheetDiag.status === 'OK' ? 'text-emerald-700' : (lastGsheetDiag.status === 'IDLE' ? 'text-gray-600' : 'text-red-600');
+    const colsLine = lastGsheetDiag.detectedCols && lastGsheetDiag.detectedCols !== '-'
+        ? `<div class="text-[10px] text-emerald-700 font-mono mt-1">Kolom terdeteksi: <b>${lastGsheetDiag.detectedCols}</b></div>`
+        : '';
     diagEl.innerHTML = `
         <div class="font-bold ${statusColor}">${lastGsheetDiag.message}</div>
         <div class="text-[10px] text-gray-500 mt-1">
             Metode: <b>${lastGsheetDiag.method}</b> | Baris dipindai: <b>${lastGsheetDiag.totalScanned}</b> | Status READY: <b>${lastGsheetDiag.readyCount}</b> | Update: <b>${timeStr}</b>
         </div>
+        ${colsLine}
     `;
 }
 
+let lastGsheetSyncStartedAt = 0;
+let currentDetailReqId = null;
+
+function isGsheetRowCompleted(row) {
+    if (!completedGsheetSerials || !row) return false;
+    if (completedGsheetSerials[row.safeKey]) return true;
+    const legacyEntry = row.legacySafeKey ? completedGsheetSerials[row.legacySafeKey] : null;
+    if (legacyEntry) {
+        return !legacyEntry.assy || legacyEntry.assy === row.assy;
+    }
+    return false;
+}
+
 function applyParsedGsheetResult(result, isManual) {
+    const prevActiveIds = new Set(gsheetReadyRequests.map(r => r.id));
     gsheetRawReadyRows = result.parsedRows || [];
     rebuildGsheetRequests();
+    const nextActiveIds = new Set(gsheetReadyRequests.map(r => r.id));
+
+    // Hitung item yang sebelumnya READY di Active Queue namun berubah menjadi CLOSED/DONE di GSheet (tanpa masuk history)
+    let removedBySheetClose = 0;
+    prevActiveIds.forEach(prevId => {
+        if (!nextActiveIds.has(prevId)) removedBySheetClose++;
+    });
 
     lastGsheetDiag = {
         status: 'OK',
         method: result.method || 'GViz',
         totalScanned: result.totalScanned || 0,
         readyCount: gsheetRawReadyRows.length,
+        detectedCols: result.detectedCols || '-',
         message: `Terhubung! Ditemukan ${gsheetRawReadyRows.length} data READY di GSheet (${gsheetReadyRequests.length} aktif belum diambil).`,
         updatedAt: Date.now()
     };
@@ -761,12 +1265,33 @@ function applyParsedGsheetResult(result, isManual) {
     updateGsheetDiagUI();
     renderData();
 
+    // Jika tiket GSheet yang sedang dibuka di modal berubah jadi CLOSED/DONE di Sheet, tutup modalnya tanpa masuk history
+    const pickerModal = document.getElementById('modal-picker');
+    if (pickerModal && !pickerModal.classList.contains('hidden')) {
+        const finishId = document.getElementById('finish-req-id')?.value || '';
+        if (finishId.startsWith('GS-') && !nextActiveIds.has(finishId)) {
+            closeModal('modal-picker');
+            showMessage('Item tersebut sudah berstatus CLOSED/DONE di Google Sheets (tidak masuk history).');
+        }
+    }
+    const detailModal = document.getElementById('modal-detail');
+    if (detailModal && !detailModal.classList.contains('hidden') && currentDetailReqId && currentDetailReqId.startsWith('GS-')) {
+        const stillActive = nextActiveIds.has(currentDetailReqId);
+        const inHistory = loadedHistoryData.some(r => r.id === currentDetailReqId);
+        if (!stillActive && !inHistory) {
+            closeModal('modal-detail');
+            showMessage('Item tersebut sudah berganti ke CLOSED/DONE di Google Sheets.');
+        }
+    }
+
     if (isManual) {
-        showMessage(`Sinkronisasi GSheet berhasil (${result.method}): ${gsheetReadyRequests.length} Ready aktif.`);
+        const extra = removedBySheetClose > 0 ? ` (${removedBySheetClose} ditutup di Sheet dihapus dari antrian)` : '';
+        showMessage(`Sinkronisasi GSheet berhasil (${result.method}): ${gsheetReadyRequests.length} Ready aktif${extra}.`);
     }
 }
 
 async function syncGsheetReadyItems(isManual = false) {
+    lastGsheetSyncStartedAt = Date.now();
     const mySeq = ++gsheetSyncSeq;
     setGsheetStatusUI('syncing', isManual ? 'GSHEET: SYNC...' : undefined);
 
@@ -797,35 +1322,7 @@ async function syncGsheetReadyItems(isManual = false) {
         const gid = String(cfg.gid ?? '0').trim();
         if (!sheetId) throw new Error('EMPTY_SHEET_ID');
 
-        // Tahap 1: GViz Filtered JSON (ringan jika sheet besar; retry tanpa kolom AI jika AI belum ada)
-        let filteredZeroFallback = null;
-        try {
-            let data = await fetchGsheetViaGvizQuery(sheetId, gid, true);
-            if (data && data.status === 'error') {
-                const errReason = (data.errors && data.errors[0] && data.errors[0].reason) || '';
-                const errMsg = (data.errors && data.errors[0] && (data.errors[0].detailed_message || data.errors[0].message)) || '';
-                if (errReason === 'invalid_query' || errMsg.toUpperCase().includes('AI') || errMsg.toUpperCase().includes('NO_COLUMN')) {
-                    data = await fetchGsheetViaGvizQuery(sheetId, gid, false);
-                }
-            }
-            if (data && data.status !== 'error' && data.table) {
-                const parsed = extractRowsFromGvizTable(data.table, true);
-                if (parsed.parsedRows.length > 0) {
-                    if (mySeq !== gsheetSyncSeq) return;
-                    applyParsedGsheetResult({ method: 'GViz Query JSON', ...parsed }, isManual);
-                    return;
-                }
-                // Simpan sebagai cadangan jika tahap CSV juga 0 baris (artinya memang 0 READY)
-                filteredZeroFallback = { method: 'GViz Query JSON', ...parsed };
-            } else if (data && data.status === 'error') {
-                const errMsg = (data.errors && data.errors[0] && (data.errors[0].detailed_message || data.errors[0].message)) || 'GVIZ_QUERY_ERROR';
-                recordErr('GVizQuery', new Error(errMsg));
-            }
-        } catch (err) {
-            recordErr('GVizQuery', err);
-        }
-
-        // Tahap 2: GViz Full CSV (kebal terhadap error tipe kolom lower(AH), headers=1, dan kolom AI kosong)
+        // Tahap 1: GViz Full CSV (membaca semua kolom & auto-deteksi header STATUS MARKER / PIC / No BOX)
         try {
             const csvRes = await fetchGsheetViaGvizCsv(sheetId, gid);
             if (mySeq !== gsheetSyncSeq) return;
@@ -835,7 +1332,7 @@ async function syncGsheetReadyItems(isManual = false) {
             recordErr('GVizCSV', err);
         }
 
-        // Tahap 3: Export CSV langsung dari Google Sheets
+        // Tahap 2: Export CSV langsung dari Google Sheets
         try {
             const expRes = await fetchGsheetViaExportCsv(sheetId, gid);
             if (mySeq !== gsheetSyncSeq) return;
@@ -845,7 +1342,7 @@ async function syncGsheetReadyItems(isManual = false) {
             recordErr('ExportCSV', err);
         }
 
-        // Tahap 4: GViz Unfiltered JSON (memetakan kolom tepat berdasarkan huruf id kolom B..AI)
+        // Tahap 3: GViz Unfiltered JSON (auto-deteksi dari metadata cols[].label & baris header)
         try {
             const fullJsonRes = await fetchGsheetViaGvizFullJson(sheetId, gid);
             if (mySeq !== gsheetSyncSeq) return;
@@ -855,19 +1352,12 @@ async function syncGsheetReadyItems(isManual = false) {
             recordErr('GVizFull', err);
         }
 
-        // Jika Tahap 1 sebenarnya sukses dengan 0 baris READY, gunakan hasil tersebut
-        if (filteredZeroFallback) {
-            if (mySeq !== gsheetSyncSeq) return;
-            applyParsedGsheetResult(filteredZeroFallback, isManual);
-            return;
-        }
-
-        // Tahap 5: JSONP Fallback (bekerja pada file:// dan saat memakai cookie sesi Google browser)
+        // Tahap 4: JSONP Fallback (bekerja pada file:// dan memakai sesi login Google di browser)
         try {
-            const jsonpData = await fetchGsheetViaJsonp(sheetId, gid, false, true);
+            const jsonpData = await fetchGsheetViaJsonp(sheetId, gid);
             if (mySeq !== gsheetSyncSeq) return;
             if (jsonpData && jsonpData.status !== 'error' && jsonpData.table) {
-                const parsed = extractRowsFromGvizTable(jsonpData.table, false);
+                const parsed = extractRowsFromGvizTable(jsonpData.table);
                 applyParsedGsheetResult({ method: 'JSONP Fallback', ...parsed }, isManual);
                 return;
             }
@@ -889,12 +1379,13 @@ async function syncGsheetReadyItems(isManual = false) {
             method: 'Gagal (HTTP 404)',
             totalScanned: 0,
             readyCount: 0,
-            message: 'Spreadsheet tidak ditemukan (HTTP 404) atau masih bersifat Privat. Klik ikon gir untuk ganti link GSheet atau buka akses "Siapa saja yang memiliki link: Viewer".',
+            detectedCols: '-',
+            message: 'Spreadsheet tidak ditemukan (HTTP 404) atau masih bersifat Privat.',
             updatedAt: Date.now()
         };
         setGsheetStatusUI('error', 'GSHEET: 404');
         updateGsheetDiagUI();
-        if (isManual) showMessage('GSheet tidak ditemukan (404) / Privat. Klik ikon gir di sebelah tombol GSHEET untuk cek atau ganti link.');
+        if (isManual) showMessage('GSheet tidak ditemukan (404) / Privat.');
         return;
     }
 
@@ -904,12 +1395,13 @@ async function syncGsheetReadyItems(isManual = false) {
             method: 'Gagal (Terkunci)',
             totalScanned: 0,
             readyCount: 0,
-            message: 'Google Sheets meminta login. Ubah Bagikan -> "Siapa saja yang memiliki link (Viewer)" atau gunakan link Publikasikan ke Web (CSV).',
+            detectedCols: '-',
+            message: 'Google Sheets meminta login. Pastikan akses "Siapa saja yang memiliki link (Viewer)".',
             updatedAt: Date.now()
         };
         setGsheetStatusUI('locked', 'GSHEET: TERKUNCI');
         updateGsheetDiagUI();
-        if (isManual) showMessage('GSheet terkunci. Pastikan akses "Anyone with the link: Viewer" atau pakai link Publikasikan ke web (CSV).');
+        if (isManual) showMessage('GSheet terkunci. Pastikan akses "Anyone with the link: Viewer".');
         return;
     }
 
@@ -919,6 +1411,7 @@ async function syncGsheetReadyItems(isManual = false) {
             method: 'Timeout',
             totalScanned: 0,
             readyCount: 0,
+            detectedCols: '-',
             message: 'Koneksi ke Google Sheets melewati batas waktu (Timeout). Coba klik ulang tombol GSHEET.',
             updatedAt: Date.now()
         };
@@ -933,12 +1426,13 @@ async function syncGsheetReadyItems(isManual = false) {
         method: 'Gagal',
         totalScanned: 0,
         readyCount: 0,
-        message: `Gagal membaca Google Sheets (${errors[errors.length - 1] || 'Koneksi terblokir'}). Klik ikon gir untuk memeriksa link.`,
+        detectedCols: '-',
+        message: `Gagal membaca Google Sheets (${errors[errors.length - 1] || 'Koneksi terblokir'}).`,
         updatedAt: Date.now()
     };
     setGsheetStatusUI('error', 'GSHEET: GAGAL');
     updateGsheetDiagUI();
-    if (isManual) showMessage('Gagal memuat Google Sheets. Klik ikon gir di sebelah tombol GSHEET untuk cek link & panduan akses.');
+    if (isManual) showMessage('Gagal memuat Google Sheets. Coba klik ulang tombol GSHEET.');
 }
 
 // Kompatibilitas balik jika ada pemanggil eksternal handleGsheetSync
@@ -948,93 +1442,25 @@ window.handleGsheetSync = function(response, isManual = false) {
         if (isManual) showMessage('Respons Google Sheets tidak valid.');
         return;
     }
-    const parsed = extractRowsFromGvizTable(response.table, true);
-    applyParsedGsheetResult({ method: 'GViz Callback', ...parsed }, isManual);
+    const parsed = extractRowsFromGvizTable(response.table);
+    applyParsedGsheetResult({ method: 'External Callback', ...parsed }, isManual);
 };
 
-function openGsheetConfigModal() {
-    const urlInput = document.getElementById('gsheet-url-input');
-    const idInput = document.getElementById('gsheet-id-input');
-    const gidInput = document.getElementById('gsheet-gid-input');
-
-    if (urlInput) {
-        urlInput.value = gsheetConfig.customUrl || (gsheetConfig.sheetId ? `https://docs.google.com/spreadsheets/d/${gsheetConfig.sheetId}/edit#gid=${gsheetConfig.gid || '0'}` : '');
-    }
-    if (idInput) idInput.value = gsheetConfig.sheetId || '';
-    if (gidInput) gidInput.value = gsheetConfig.gid || '';
-
-    updateGsheetDiagUI();
-    openModal('modal-gsheet-config');
-}
-
-function handleGsheetUrlPaste(val) {
-    const extracted = extractGsheetFromUrl(val);
-    if (!extracted) return;
-    const idInput = document.getElementById('gsheet-id-input');
-    const gidInput = document.getElementById('gsheet-gid-input');
-    if (idInput && extracted.sheetId) idInput.value = extracted.sheetId;
-    if (gidInput && extracted.gid !== undefined) gidInput.value = extracted.gid;
-}
-
-function saveGsheetConfig() {
-    const rawUrl = (document.getElementById('gsheet-url-input')?.value || '').trim();
-    const manualId = (document.getElementById('gsheet-id-input')?.value || '').trim();
-    const manualGid = (document.getElementById('gsheet-gid-input')?.value || '').trim();
-
-    let nextCfg = {
-        sheetId: manualId || DEFAULT_GSHEET_CONFIG.sheetId,
-        gid: manualGid || '0',
-        customUrl: ''
-    };
-
-    const extracted = extractGsheetFromUrl(rawUrl);
-    if (extracted) {
-        if (extracted.customUrl) {
-            nextCfg.customUrl = extracted.customUrl;
-            nextCfg.sheetId = extracted.sheetId || nextCfg.sheetId;
-            nextCfg.gid = extracted.gid || nextCfg.gid;
-        } else if (extracted.sheetId) {
-            nextCfg.sheetId = manualId || extracted.sheetId;
-            nextCfg.gid = manualGid !== '' ? manualGid : extracted.gid;
-        }
-    }
-
-    gsheetConfig = nextCfg;
-    saveLocalGsheetConfig(gsheetConfig);
-    try {
-        if (gsheetConfigRef) gsheetConfigRef.set(gsheetConfig);
-    } catch (e) {
-        console.warn('Tidak dapat menyinkronkan config GSheet ke Firebase:', e);
-    }
-
-    isFirstGsheetLoad = true;
-    showMessage('Konfigurasi Google Sheets disimpan. Menjalankan sinkronisasi...');
-    syncGsheetReadyItems(true);
-}
-
-function resetGsheetConfig() {
-    gsheetConfig = { ...DEFAULT_GSHEET_CONFIG };
-    saveLocalGsheetConfig(gsheetConfig);
-    try {
-        if (gsheetConfigRef) gsheetConfigRef.set(gsheetConfig);
-    } catch (e) {}
-    openGsheetConfigModal();
-    isFirstGsheetLoad = true;
-    syncGsheetReadyItems(true);
-}
 
 function rebuildGsheetRequests() {
     const activeGsheet = [];
     let newlyReadyForUser = null;
 
     gsheetRawReadyRows.forEach(row => {
-        // Validasi Serial WO ID: jika sudah ditandai selesai di sistem ini, abaikan meski di GSheet masih READY
-        if (completedGsheetSerials && completedGsheetSerials[row.safeKey]) {
+        // Validasi item GSheet: jika sudah ditandai selesai di sistem ini, abaikan meski di GSheet masih READY
+        if (isGsheetRowCompleted(row)) {
             return;
         }
 
-        const meta = (gsheetMetaMap && gsheetMetaMap[row.safeKey]) ? gsheetMetaMap[row.safeKey] : {};
-        const boxLabel = row.noBox ? `BOX: ${row.noBox}` : 'BOX: -';
+        const meta = (gsheetMetaMap && (gsheetMetaMap[row.safeKey] || (row.legacySafeKey ? gsheetMetaMap[row.legacySafeKey] : null))) || {};
+        const boxLabel = row.noBox
+            ? (/^BOX\b/i.test(row.noBox) ? row.noBox : `BOX: ${row.noBox}`)
+            : 'BOX: -';
         const noteText = `GSheet Auto-Ready | Serial WO: ${row.serialWO} | No Box: ${row.noBox || '-'} | Tgl Print: ${row.tglPrintLabel}`;
 
         const reqObj = {
@@ -1043,8 +1469,11 @@ function rebuildGsheetRequests() {
             isFromGsheet: true,
             gsheetSerial: row.serialWO,
             gsheetSafeKey: row.safeKey,
+            gsheetLegacySafeKey: row.legacySafeKey,
             noBox: row.noBox || '-',
             tglPrintLabel: row.tglPrintLabel,
+            hasTglPrint: !!row.hasTglPrint,
+            colLetters: row.colLetters || null,
             rawLine: row.rawLine,
             systemType: 'STATION MARKER',
             shift: '-',
@@ -1430,29 +1859,6 @@ function initRealtimeDB() {
         });
     }
 
-    if (gsheetConfigRef) {
-        gsheetConfigRef.on('value', (snapshot) => {
-            const remoteCfg = snapshot.val();
-            if (remoteCfg && (remoteCfg.sheetId || remoteCfg.customUrl)) {
-                const nextCfg = {
-                    sheetId: String(remoteCfg.sheetId || DEFAULT_GSHEET_CONFIG.sheetId).trim(),
-                    gid: String(remoteCfg.gid ?? DEFAULT_GSHEET_CONFIG.gid).trim(),
-                    customUrl: String(remoteCfg.customUrl || '').trim()
-                };
-                const changed = nextCfg.sheetId !== gsheetConfig.sheetId ||
-                    nextCfg.gid !== gsheetConfig.gid ||
-                    nextCfg.customUrl !== gsheetConfig.customUrl;
-
-                gsheetConfig = nextCfg;
-                saveLocalGsheetConfig(gsheetConfig);
-
-                if (changed && currentUser) {
-                    isFirstGsheetLoad = true;
-                    syncGsheetReadyItems(false);
-                }
-            }
-        });
-    }
 
     if (currentUser && currentUser.role === 'leader') {
         attachWarehousePresenceListener();
@@ -1566,6 +1972,9 @@ function handleLogout() {
         isWhPresenceListenerAttached = false;
     }
     currentUser = null;
+    selectedBatchIds.clear();
+    batchFinishIds = [];
+    currentVisibleReadyIds = [];
     if (timeInterval) clearInterval(timeInterval);
     if (clockInterval) clearInterval(clockInterval);
     if (whPresenceInterval) clearInterval(whPresenceInterval);
@@ -1630,9 +2039,24 @@ function showApp() {
 
     syncGsheetReadyItems(false);
     if (gsheetPollInterval) clearInterval(gsheetPollInterval);
-    gsheetPollInterval = setInterval(() => syncGsheetReadyItems(false), 20000);
+    gsheetPollInterval = setInterval(() => syncGsheetReadyItems(false), 10000);
 
     renderData();
+}
+
+function triggerAutoSyncOnReturn() {
+    if (!currentUser) return;
+    if (typeof document !== 'undefined' && document.hidden) return;
+    if (Date.now() - lastGsheetSyncStartedAt > 3000) {
+        syncGsheetReadyItems(false);
+    }
+}
+
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    window.addEventListener('focus', triggerAutoSyncOnReturn);
+}
+if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+    document.addEventListener('visibilitychange', triggerAutoSyncOnReturn);
 }
 
 function showMessage(msg) {
@@ -1649,6 +2073,7 @@ function openModal(id) {
 }
 
 function closeModal(id) {
+    if (id === 'modal-detail') currentDetailReqId = null;
     document.getElementById(id).classList.add('hidden');
     document.body.classList.remove('modal-active');
 }
@@ -1675,6 +2100,7 @@ function generateId() {
 
 function toggleHistory() {
     isHistoryOpen = !isHistoryOpen;
+    if (typeof hideHistoryContextMenu === 'function') hideHistoryContextMenu();
     updateHistoryPanelCSS();
     if (isHistoryOpen) {
         if (!document.getElementById('history-date-start').value) {
@@ -1704,12 +2130,247 @@ function routeNewKanban() {
     openModal('modal-select-type-marker');
 }
 
+const ASSY_HISTORY_CACHE_KEY = 'eks_assy_history_cache_v1';
+let assyHistoryCache = loadLocalAssyHistoryCache();
+let assyHistoryLastFetchAt = 0;
+let assyHistoryFetchPromise = null;
+let assySuggestionList = [];
+let assySuggestionActiveIdx = -1;
+
+function loadLocalAssyHistoryCache() {
+    try {
+        const raw = localStorage.getItem(ASSY_HISTORY_CACHE_KEY);
+        if (raw) return JSON.parse(raw) || {};
+    } catch (e) {}
+    return {};
+}
+
+function saveLocalAssyHistoryCache() {
+    try {
+        localStorage.setItem(ASSY_HISTORY_CACHE_KEY, JSON.stringify(assyHistoryCache));
+    } catch (e) {}
+}
+
+function recordAssyEntriesToMap(targetMap, reqList) {
+    if (!Array.isArray(reqList)) return;
+    reqList.forEach(req => {
+        if (!req || req.isFromGsheet) return;
+        if (req.systemType && currentUser && req.systemType !== currentUser.section) return;
+        const ts = Number(req.timeFinished || req.timestamp || 0);
+        (req.items || []).forEach(item => {
+            const assy = String(item && item.assy ? item.assy : '').trim().toUpperCase();
+            if (!assy) return;
+            const prev = targetMap[assy];
+            if (!prev || ts >= (prev.lastTs || 0)) {
+                targetMap[assy] = {
+                    assy,
+                    wp: String(item.wp || prev?.wp || '').trim().toUpperCase(),
+                    line: item.line || prev?.line || '',
+                    typeMarker: item.typeMarker || prev?.typeMarker || '',
+                    lastTs: Math.max(ts, prev?.lastTs || 0),
+                    count: (prev?.count || 0) + 1
+                };
+            } else {
+                prev.count = (prev.count || 0) + 1;
+            }
+        });
+    });
+}
+
+function recordRequestAssyToHistoryCache(req) {
+    if (!req) return;
+    recordAssyEntriesToMap(assyHistoryCache, [req]);
+    saveLocalAssyHistoryCache();
+}
+
+function getMergedAssyHistoryMap() {
+    const merged = {};
+    // 1. Dari cache persisten history kanban
+    Object.keys(assyHistoryCache || {}).forEach(k => {
+        const entry = assyHistoryCache[k];
+        if (entry && entry.assy) merged[k] = { ...entry };
+    });
+    // 2. Dari localStorage history buckets
+    try {
+        const allLocalHist = JSON.parse(localStorage.getItem(LOCAL_HISTORY_STORAGE_KEY) || '{}') || {};
+        Object.values(allLocalHist).forEach(arr => recordAssyEntriesToMap(merged, arr));
+    } catch (e) {}
+    // 3. Dari cache Firestore history buckets & loadedHistoryData sesi ini
+    Object.values(cachedHistoryBuckets || {}).forEach(arr => recordAssyEntriesToMap(merged, arr));
+    recordAssyEntriesToMap(merged, loadedHistoryData);
+    // 4. Dari antrian kanban manual aktif yang pernah dibuat
+    recordAssyEntriesToMap(merged, db.requests || []);
+    return merged;
+}
+
+async function ensureAssyHistoryLoaded() {
+    if (!dbFs) return;
+    if (Date.now() - assyHistoryLastFetchAt < 60000) return;
+    if (assyHistoryFetchPromise) return assyHistoryFetchPromise;
+
+    assyHistoryFetchPromise = (async () => {
+        try {
+            const snap = await dbFs.collection('eks_history_buckets').limit(60).get();
+            let updated = false;
+            snap.forEach(doc => {
+                const data = doc.data();
+                const txList = Array.isArray(data && data.transactions) ? data.transactions : [];
+                if (doc.id && !cachedHistoryBuckets[doc.id]) {
+                    cachedHistoryBuckets[doc.id] = txList;
+                }
+                if (txList.length > 0) {
+                    recordAssyEntriesToMap(assyHistoryCache, txList);
+                    updated = true;
+                }
+            });
+            assyHistoryLastFetchAt = Date.now();
+            if (updated) {
+                saveLocalAssyHistoryCache();
+                const assyInput = document.getElementById('form-assy-m');
+                if (assyInput && assyInput.value.trim().length >= 2) {
+                    renderAssySuggestions(assyInput.value);
+                }
+            }
+        } catch (e) {
+            console.warn('Gagal memuat histori No Assy dari Firestore:', e);
+        } finally {
+            assyHistoryFetchPromise = null;
+        }
+    })();
+
+    return assyHistoryFetchPromise;
+}
+
+function getAssyHistorySuggestions(rawQuery) {
+    const query = String(rawQuery || '').trim().toUpperCase();
+    // Muncul hanya mulai dari 2 karakter pertama yang sama dengan input user
+    if (query.length < 2) return [];
+    const merged = getMergedAssyHistoryMap();
+    return Object.values(merged)
+        .filter(entry => entry.assy.startsWith(query))
+        .sort((a, b) => (b.lastTs || 0) - (a.lastTs || 0) || a.assy.localeCompare(b.assy))
+        .slice(0, 15);
+}
+
+function escapeHtmlAttr(str) {
+    return String(str || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function renderAssySuggestions(rawQuery) {
+    const dropdown = document.getElementById('assy-suggestion-dropdown');
+    if (!dropdown) return;
+
+    const query = String(rawQuery || '').trim().toUpperCase();
+    const matches = getAssyHistorySuggestions(query);
+    assySuggestionList = matches;
+    assySuggestionActiveIdx = -1;
+
+    if (matches.length === 0) {
+        dropdown.innerHTML = '';
+        dropdown.classList.add('hidden');
+        return;
+    }
+
+    dropdown.innerHTML = matches.map((item, idx) => {
+        const prefix = escapeHtmlAttr(item.assy.slice(0, query.length));
+        const rest = escapeHtmlAttr(item.assy.slice(query.length));
+        const safeVal = escapeHtmlAttr(item.assy);
+        return `
+        <button type="button" data-assy-idx="${idx}" onmousedown="event.preventDefault(); selectAssySuggestion('${safeVal}')"
+            class="assy-sugg-item w-full text-left px-3 py-2 text-xs border-b border-gray-100 last:border-b-0 hover:bg-blue-50 flex items-center justify-between gap-2 transition-colors">
+            <span class="font-display font-black text-gray-800 tracking-wide"><span class="text-brand-teal bg-teal-50 px-0.5 rounded">${prefix}</span>${rest}</span>
+            <span class="text-[9px] font-bold text-gray-400 uppercase shrink-0">${item.line ? escapeHtmlAttr(item.line) : 'History'}</span>
+        </button>`;
+    }).join('');
+    dropdown.classList.remove('hidden');
+}
+
+function hideAssySuggestionsDelayed() {
+    setTimeout(() => {
+        const dropdown = document.getElementById('assy-suggestion-dropdown');
+        if (dropdown) dropdown.classList.add('hidden');
+        assySuggestionActiveIdx = -1;
+    }, 150);
+}
+
+function selectAssySuggestion(assyVal) {
+    const input = document.getElementById('form-assy-m');
+    if (input) {
+        input.value = String(assyVal || '').toUpperCase();
+    }
+    const dropdown = document.getElementById('assy-suggestion-dropdown');
+    if (dropdown) {
+        dropdown.innerHTML = '';
+        dropdown.classList.add('hidden');
+    }
+    assySuggestionList = [];
+    assySuggestionActiveIdx = -1;
+}
+
+function handleAssyInputChange(el) {
+    el.value = el.value.toUpperCase();
+    renderAssySuggestions(el.value);
+}
+
+function updateAssySuggestionHighlight() {
+    const dropdown = document.getElementById('assy-suggestion-dropdown');
+    if (!dropdown) return;
+    const items = dropdown.querySelectorAll('.assy-sugg-item');
+    items.forEach((btn, idx) => {
+        if (idx === assySuggestionActiveIdx) {
+            btn.classList.add('bg-blue-50');
+            if (typeof btn.scrollIntoView === 'function') btn.scrollIntoView({ block: 'nearest' });
+        } else {
+            btn.classList.remove('bg-blue-50');
+        }
+    });
+}
+
+function handleAssySuggestionKeydown(e, nextFocusFn) {
+    const dropdown = document.getElementById('assy-suggestion-dropdown');
+    const isOpen = dropdown && !dropdown.classList.contains('hidden') && assySuggestionList.length > 0;
+
+    if (isOpen && e.key === 'ArrowDown') {
+        e.preventDefault();
+        assySuggestionActiveIdx = (assySuggestionActiveIdx + 1) % assySuggestionList.length;
+        updateAssySuggestionHighlight();
+        return true;
+    }
+    if (isOpen && e.key === 'ArrowUp') {
+        e.preventDefault();
+        assySuggestionActiveIdx = assySuggestionActiveIdx <= 0 ? assySuggestionList.length - 1 : assySuggestionActiveIdx - 1;
+        updateAssySuggestionHighlight();
+        return true;
+    }
+    if (isOpen && e.key === 'Escape') {
+        e.preventDefault();
+        dropdown.classList.add('hidden');
+        assySuggestionActiveIdx = -1;
+        return true;
+    }
+    if (isOpen && e.key === 'Enter' && assySuggestionActiveIdx >= 0 && assySuggestionList[assySuggestionActiveIdx]) {
+        e.preventDefault();
+        selectAssySuggestion(assySuggestionList[assySuggestionActiveIdx].assy);
+        return true;
+    }
+    if (e.key === 'Enter' && typeof nextFocusFn === 'function') {
+        if (dropdown) dropdown.classList.add('hidden');
+        e.preventDefault();
+        nextFocusFn();
+        return true;
+    }
+    return false;
+}
+
 function selectKanbanTypeMarker(type) {
     currentKanbanTypeMarker = type;
     document.getElementById('form-type-badge-marker').textContent = type;
     closeModal('modal-select-type-marker');
     tempAssyListMarker = [];
+    assySuggestionList = [];
+    assySuggestionActiveIdx = -1;
     renderTempListMarker();
+    ensureAssyHistoryLoaded();
     if (type === 'ALL') renderFormInputsMarkerALL();
     else renderFormInputsMarkerIMPP();
     openModal('modal-kanban-marker');
@@ -1720,7 +2381,11 @@ function selectKanbanTypeMarker(type) {
 
 function renderFormInputsMarkerALL() {
     document.getElementById('form-inputs-container-marker').innerHTML = `
-        <div><label class="label-stylish">NO ASSY</label><input type="text" id="form-assy-m" class="input-stylish w-full uppercase" placeholder="Scan/Ketik Assy" oninput="this.value = this.value.toUpperCase()"></div>
+        <div class="relative">
+            <label class="label-stylish">NO ASSY</label>
+            <input type="text" id="form-assy-m" autocomplete="off" class="input-stylish w-full uppercase" placeholder="Scan/Ketik Assy (min 2 karakter untuk saran)" oninput="handleAssyInputChange(this)" onfocus="renderAssySuggestions(this.value)" onblur="hideAssySuggestionsDelayed()">
+            <div id="assy-suggestion-dropdown" class="hidden absolute left-0 right-0 top-full mt-1 bg-white border border-blue-200 rounded-lg shadow-xl z-50 max-h-48 overflow-y-auto"></div>
+        </div>
         <div class="flex gap-3 mt-3">
             <div class="w-1/3"><label class="label-stylish">W/P</label><input type="text" id="form-wp-m" class="input-stylish w-full uppercase" placeholder="07/04" oninput="this.value = this.value.toUpperCase()"></div>
             <div class="w-1/3"><label class="label-stylish">QTY</label><input type="number" min="1" id="form-qty-m" class="input-stylish w-full" placeholder="0"></div>
@@ -1742,6 +2407,14 @@ function renderFormInputsMarkerALL() {
         const inputs = Array.from(document.getElementById('form-inputs-container-marker').querySelectorAll('input, select'));
         inputs.forEach((input, index) => {
             input.onkeydown = function(e) {
+                if (input.id === 'form-assy-m') {
+                    const handled = handleAssySuggestionKeydown(e, () => {
+                        const nextInput = inputs[index + 1];
+                        if (nextInput) nextInput.focus();
+                        else addAssyToTempMarker();
+                    });
+                    if (handled) return;
+                }
                 if (e.key === 'Enter') {
                     e.preventDefault();
                     const nextInput = inputs[index + 1];
@@ -1755,7 +2428,11 @@ function renderFormInputsMarkerALL() {
 
 function renderFormInputsMarkerIMPP() {
     document.getElementById('form-inputs-container-marker').innerHTML = `
-        <div><label class="label-stylish">NO ASSY</label><input type="text" id="form-assy-m" class="input-stylish w-full uppercase font-black text-brand-blue" placeholder="Scan/Ketik Assy" oninput="this.value = this.value.toUpperCase()"></div>
+        <div class="relative">
+            <label class="label-stylish">NO ASSY</label>
+            <input type="text" id="form-assy-m" autocomplete="off" class="input-stylish w-full uppercase font-black text-brand-blue" placeholder="Scan/Ketik Assy (min 2 karakter untuk saran)" oninput="handleAssyInputChange(this)" onfocus="renderAssySuggestions(this.value)" onblur="hideAssySuggestionsDelayed()">
+            <div id="assy-suggestion-dropdown" class="hidden absolute left-0 right-0 top-full mt-1 bg-white border border-blue-200 rounded-lg shadow-xl z-50 max-h-48 overflow-y-auto"></div>
+        </div>
         <div class="flex gap-3 mt-3">
             <div class="w-1/2"><label class="label-stylish">W/P</label><input type="text" id="form-wp-m" class="input-stylish w-full uppercase" placeholder="07/04" oninput="this.value = this.value.toUpperCase()"></div>
             <div class="w-1/2"><label class="label-stylish text-purple-600">LOT <span class="text-[8px] text-gray-400 font-normal normal-case">(Opsional)</span></label><input type="text" id="form-lot-m" class="input-stylish w-full text-purple-700 border-purple-200 bg-purple-50 uppercase" placeholder="Cth: A" oninput="this.value = this.value.toUpperCase()"></div>
@@ -1787,6 +2464,15 @@ function renderFormInputsMarkerIMPP() {
     }
 
     setTimeout(() => {
+        const assyInput = document.getElementById('form-assy-m');
+        if (assyInput) {
+            assyInput.onkeydown = function(e) {
+                handleAssySuggestionKeydown(e, () => {
+                    const wpInput = document.getElementById('form-wp-m');
+                    if (wpInput) wpInput.focus();
+                });
+            };
+        }
         document.getElementById('form-marker-input-m').addEventListener('keypress', function(e) {
             if (e.key === 'Enter') {
                 e.preventDefault();
@@ -2127,7 +2813,7 @@ function submitRequestMarker() {
         const rnd = Math.random().toString(36).substring(2, 5).toUpperCase();
         const dispId = `${lineInit}${shift}-${ddmm}-${rnd}`;
 
-        db.requests.push({
+        const reqPayload = {
             id: generateId() + '-' + index,
             displayId: dispId,
             systemType: sysType,
@@ -2142,7 +2828,9 @@ function submitRequestMarker() {
             requestedStation: currentUser.section,
             messages: [],
             lastSignal: signalStr
-        });
+        };
+        db.requests.push(reqPayload);
+        recordRequestAssyToHistoryCache(reqPayload);
     });
 
     saveDB();
@@ -2226,7 +2914,7 @@ function generateCardHTML_Leader(req) {
             <div class="text-center mr-3 w-28 shrink-0 flex flex-col items-center justify-center p-1.5 rounded border-2 border-emerald-500 bg-emerald-50 text-emerald-800 shadow-sm">
                 <div class="text-[7px] font-black uppercase bg-emerald-600 text-white px-1.5 py-0.5 rounded-full mb-1 tracking-wider flex items-center gap-1"><i class="fas fa-table"></i> GSHEET</div>
                 <div class="text-[7px] font-bold uppercase opacity-75 leading-none">NO BOX</div>
-                <div class="font-display font-black text-xs leading-tight break-all text-emerald-900 mt-0.5">${req.noBox || '-'}</div>
+                <div class="font-display font-black text-[11px] leading-tight break-words text-emerald-900 mt-0.5 w-full">${req.noBox || '-'}</div>
             </div>
             ` : `
             <div class="text-center mr-3 w-24 shrink-0 flex flex-col items-center justify-center p-1.5 rounded border shadow-sm ${getLineColor(item.line)}">
@@ -2245,7 +2933,7 @@ function generateCardHTML_Leader(req) {
                     ${req.isFromGsheet ? `<span class="text-[8px] font-bold px-1.5 py-0.5 rounded uppercase border ${getLineColor(item.line)}">${item.line}</span>` : ''}
                     <span class="text-[8px] font-bold px-1.5 py-0.5 rounded uppercase border ${req.type === 'ALL' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}">${req.type}</span>
                     <span class="text-[8px] font-bold bg-indigo-50 text-indigo-700 border-indigo-200 px-1.5 py-0.5 rounded uppercase border">${displayTypeMarker}</span>
-                    ${req.isFromGsheet ? `<span class="text-[8px] font-bold px-1.5 py-0.5 rounded uppercase border bg-emerald-100 text-emerald-800 border-emerald-200"><i class="fas fa-print mr-1"></i>${req.tglPrintLabel}</span>` : `<span class="text-[8px] font-bold px-1.5 py-0.5 rounded uppercase border bg-orange-100 text-orange-700">SHIFT ${req.shift || '-'}</span>`}
+                    ${req.isFromGsheet ? `<span title="Tanggal Print (GSheet)" class="text-[8px] font-bold px-1.5 py-0.5 rounded uppercase border bg-emerald-100 text-emerald-800 border-emerald-200"><i class="fas fa-print mr-1"></i>TGL PRINT: ${req.tglPrintLabel}</span>` : `<span class="text-[8px] font-bold px-1.5 py-0.5 rounded uppercase border bg-orange-100 text-orange-700">SHIFT ${req.shift || '-'}</span>`}
                     <span class="bg-teal-50 text-brand-teal px-1.5 py-0.5 rounded border border-teal-200 uppercase text-[8px] font-bold truncate max-w-[110px]"><i class="fas fa-user mr-1"></i>${req.isFromGsheet ? 'WH: ' + (req.supplierBy || '-') : (item.pic || req.requestedBy)}</span>
                 </div>
             </div>
@@ -2275,8 +2963,8 @@ function generateCardHTML_Compact(req, actionBtnHTML, progressHTML, timerHTML) {
             ${req.isFromGsheet ? `
             <div class="p-1 rounded border-2 border-emerald-500 bg-emerald-50 text-emerald-800 shadow-sm w-full flex flex-col items-center justify-center">
                 <span class="text-[5px] font-black uppercase bg-emerald-600 text-white px-1 rounded mb-0.5">GSHEET</span>
-                <span class="text-[5px] font-bold uppercase opacity-75 leading-none">BOX</span>
-                <span class="font-display font-black text-[9px] leading-tight break-all text-emerald-900">${req.noBox || '-'}</span>
+                <span class="text-[5px] font-bold uppercase opacity-75 leading-none">NO BOX</span>
+                <span class="font-display font-black text-[8px] leading-tight break-words text-emerald-900 w-full">${req.noBox || '-'}</span>
             </div>
             ` : `
             <div class="p-1 rounded border shadow-sm w-full ${getLineColor(item.line)} flex flex-col items-center justify-center">
@@ -2290,7 +2978,7 @@ function generateCardHTML_Compact(req, actionBtnHTML, progressHTML, timerHTML) {
             <div class="flex flex-wrap items-center gap-1 mt-1">
                 ${req.isFromGsheet ? `<span class="text-[6px] font-bold px-1 rounded uppercase border ${getLineColor(item.line)}">${getLineInit(item.line)}</span>` : ''}
                 <span class="text-[6px] font-bold px-1 rounded uppercase border ${req.type === 'ALL' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}">${req.type}</span>
-                ${req.isFromGsheet ? `<span class="text-[6px] font-bold bg-emerald-100 text-emerald-800 px-1 rounded uppercase border border-emerald-200">${req.tglPrintLabel}</span>` : `<span class="text-[6px] font-bold bg-orange-100 text-orange-700 px-1 rounded uppercase border">SH-${req.shift || '-'}</span>`}
+                ${req.isFromGsheet ? `<span title="Tanggal Print (GSheet)" class="text-[6px] font-bold bg-emerald-100 text-emerald-800 px-1 rounded uppercase border border-emerald-200"><i class="fas fa-print mr-0.5"></i>${req.tglPrintLabel}</span>` : `<span class="text-[6px] font-bold bg-orange-100 text-orange-700 px-1 rounded uppercase border">SH-${req.shift || '-'}</span>`}
                 <span class="text-[7px] text-brand-teal bg-teal-50 border border-teal-200 px-1 rounded uppercase font-bold truncate max-w-[60px]">${item.pic || req.requestedBy}</span>
                 <span class="text-[7px] font-black border border-blue-200 px-1 rounded bg-blue-50 text-blue-600">QTY: ${totalQty}</span>
                 ${item.lot ? `<span class="text-[7px] font-black border border-purple-200 bg-purple-50 text-purple-700 px-1 rounded uppercase">L: ${item.lot}</span>` : ''}
@@ -2299,6 +2987,202 @@ function generateCardHTML_Compact(req, actionBtnHTML, progressHTML, timerHTML) {
         <div class="shrink-0 border-l border-white/60 pl-1.5 pr-1 flex items-center justify-center">${timerHTML}</div>
         <div class="w-[50px] flex flex-col justify-center shrink-0 border-l border-white/60 pl-1.5 px-0.5">${progressHTML}${actionBtnHTML}</div>
     </div>`;
+}
+
+let selectedBatchIds = new Set();
+let currentVisibleReadyIds = [];
+let batchFinishIds = [];
+
+function isRequestClosableReady(req) {
+    return !!(req && (req.status === STATUS_READY || req.status === STATUS_PICKED_UP));
+}
+
+function getBatchModalFilteredRequests() {
+    const allReady = getAllActiveRequests().filter(isRequestClosableReady);
+    const searchVal = (document.getElementById('batch-modal-search')?.value || '').trim().toLowerCase();
+    const lineFilter = document.getElementById('batch-modal-line')?.value || 'ALL';
+    const sortDateDir = document.getElementById('sort-date')?.value || 'asc';
+
+    const filtered = allReady.filter(req => {
+        const matchLine = lineFilter === 'ALL' ? true : req.items.some(i => i.line === lineFilter);
+        const matchSearch = !searchVal
+            || req.items.some(i => (i.assy || i.item || '').toLowerCase().includes(searchVal) || (i.wp || '').toLowerCase().includes(searchVal))
+            || (req.displayId && req.displayId.toLowerCase().includes(searchVal))
+            || (req.gsheetSerial && req.gsheetSerial.toLowerCase().includes(searchVal))
+            || (req.noBox && req.noBox.toLowerCase().includes(searchVal))
+            || (req.tglPrintLabel && req.tglPrintLabel.toLowerCase().includes(searchVal));
+        return matchLine && matchSearch;
+    });
+
+    filtered.sort((a, b) => {
+        if (b.urgent !== a.urgent) return (b.urgent ? 1 : 0) - (a.urgent ? 1 : 0);
+        return sortDateDir === 'asc' ? a.timestamp - b.timestamp : b.timestamp - a.timestamp;
+    });
+    return filtered;
+}
+
+function updateBatchToolbarUI() {
+    const activeClosableSet = new Set(getAllActiveRequests().filter(isRequestClosableReady).map(r => r.id));
+    selectedBatchIds.forEach(id => {
+        if (!activeClosableSet.has(id)) selectedBatchIds.delete(id);
+    });
+
+    const badgeEl = document.getElementById('batch-ready-badge');
+    if (badgeEl) {
+        badgeEl.textContent = currentVisibleReadyIds.length;
+    }
+
+    const modalEl = document.getElementById('modal-batch-close');
+    if (modalEl && !modalEl.classList.contains('hidden')) {
+        renderBatchCloseModalList();
+    }
+}
+
+function updateBatchModalControls(filteredReady) {
+    const selectAllBtn = document.getElementById('btn-batch-modal-select-all');
+    const selectedBadge = document.getElementById('batch-modal-selected-badge');
+    const submitBtn = document.getElementById('btn-submit-batch-close');
+
+    const visibleIds = filteredReady.map(r => r.id);
+    const selectedVisibleCount = visibleIds.filter(id => selectedBatchIds.has(id)).length;
+    const allVisibleSelected = visibleIds.length > 0 && selectedVisibleCount === visibleIds.length;
+
+    if (selectAllBtn) {
+        if (allVisibleSelected) {
+            selectAllBtn.className = 'border border-orange-300 bg-orange-50 hover:bg-orange-100 text-orange-700 px-3 py-1.5 rounded-lg text-xs font-black transition flex items-center gap-1.5 cursor-pointer';
+            selectAllBtn.innerHTML = `<i class="fas fa-times-circle"></i><span>Batal Pilih (${selectedVisibleCount}/${visibleIds.length})</span>`;
+        } else {
+            selectAllBtn.className = 'border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 px-3 py-1.5 rounded-lg text-xs font-black transition flex items-center gap-1.5 cursor-pointer';
+            selectAllBtn.innerHTML = `<i class="far fa-check-square"></i><span>Pilih Semua (${visibleIds.length})</span>`;
+        }
+    }
+
+    if (selectedBadge) {
+        selectedBadge.textContent = `${selectedBatchIds.size} Terpilih`;
+    }
+
+    if (submitBtn) {
+        submitBtn.disabled = selectedBatchIds.size === 0;
+        submitBtn.innerHTML = `<i class="fas fa-check-double"></i><span>Selesaikan Terpilih (${selectedBatchIds.size})</span>`;
+    }
+}
+
+function renderBatchCloseModalList() {
+    const listEl = document.getElementById('batch-modal-list');
+    if (!listEl) return;
+
+    const filteredReady = getBatchModalFilteredRequests();
+    currentVisibleReadyIds = filteredReady.map(r => r.id);
+    updateBatchModalControls(filteredReady);
+
+    if (filteredReady.length === 0) {
+        listEl.innerHTML = `<div class="h-48 flex flex-col items-center justify-center text-gray-400"><i class="fas fa-box-open text-3xl mb-2 opacity-50"></i><p class="text-xs font-bold uppercase">Tidak ada item berstatus READY pada filter ini</p></div>`;
+        return;
+    }
+
+    listEl.innerHTML = filteredReady.map(req => {
+        const item = req.items[0] || {};
+        const checked = selectedBatchIds.has(req.id);
+        const totalQty = req.type === 'ALL'
+            ? item.qty
+            : (item.markers || []).reduce((sum, m) => sum + Number(m.qty || 0), 0);
+
+        return `
+        <label class="flex items-center gap-3 p-2.5 rounded-xl border transition cursor-pointer select-none ${checked ? 'bg-emerald-50/90 border-emerald-400 shadow-sm' : 'bg-white border-gray-200 hover:border-teal-300'}">
+            <input type="checkbox" class="batch-select-checkbox accent-emerald-600 w-4 h-4 cursor-pointer shrink-0" data-req-id="${req.id}" onchange="toggleBatchSelect('${req.id}', this.checked)" ${checked ? 'checked' : ''}>
+            <div class="w-24 shrink-0 text-center p-1.5 rounded-lg border ${req.isFromGsheet ? 'border-emerald-400 bg-emerald-50 text-emerald-900' : getLineColor(item.line)}">
+                <div class="text-[7px] font-black uppercase opacity-75">${req.isFromGsheet ? 'GSHEET • NO BOX' : 'ID KANBAN'}</div>
+                <div class="font-display font-black text-[11px] leading-tight break-words mt-0.5">${req.isFromGsheet ? (req.noBox || '-') : (req.displayId || req.queueNum)}</div>
+            </div>
+            <div class="flex-1 min-w-0">
+                <div class="flex flex-wrap items-center gap-1.5">
+                    <span class="font-display font-black text-sm text-gray-800 uppercase">${item.assy || '-'}</span>
+                    <span class="bg-gray-800 text-white px-1.5 py-0.5 rounded text-[9px] font-black uppercase">WP: ${item.wp || '-'}</span>
+                    <span class="bg-blue-600 text-white px-1.5 py-0.5 rounded text-[9px] font-black">QTY: ${totalQty}</span>
+                    ${item.lot ? `<span class="bg-purple-600 text-white px-1.5 py-0.5 rounded text-[9px] font-black">${item.lot}</span>` : ''}
+                    ${req.urgent ? `<span class="bg-red-500 text-white px-1.5 py-0.5 rounded text-[8px] font-black uppercase">URGENT</span>` : ''}
+                </div>
+                <div class="flex flex-wrap items-center gap-1.5 mt-1 text-[9px] font-bold text-gray-500">
+                    <span class="px-1.5 py-0.5 rounded border ${getLineColor(item.line)} uppercase">${item.line || '-'}</span>
+                    ${req.isFromGsheet ? `<span class="px-1.5 py-0.5 rounded border bg-emerald-100 text-emerald-800 border-emerald-200 uppercase"><i class="fas fa-print mr-1"></i>TGL PRINT: ${req.tglPrintLabel || '-'}</span>` : `<span class="px-1.5 py-0.5 rounded border bg-orange-50 text-orange-700 border-orange-200 uppercase">SHIFT ${req.shift || '-'}</span>`}
+                    <span class="px-1.5 py-0.5 rounded border bg-teal-50 text-brand-teal border-teal-200 uppercase"><i class="fas fa-user mr-1"></i>${req.isFromGsheet ? 'WH: ' + (req.supplierBy || '-') : (item.pic || req.requestedBy || '-')}</span>
+                </div>
+            </div>
+        </label>`;
+    }).join('');
+}
+
+function openBatchCloseModal() {
+    const mainLine = document.getElementById('filter-line')?.value || 'ALL';
+    const mainSearch = document.getElementById('search-input')?.value || '';
+    const modalLineEl = document.getElementById('batch-modal-line');
+    const modalSearchEl = document.getElementById('batch-modal-search');
+    const pickerInput = document.getElementById('batch-picker-name-input');
+
+    if (modalLineEl) modalLineEl.value = mainLine;
+    if (modalSearchEl) modalSearchEl.value = mainSearch;
+    if (pickerInput) pickerInput.value = '';
+
+    selectedBatchIds.clear();
+    renderBatchCloseModalList();
+    openModal('modal-batch-close');
+    setTimeout(() => {
+        if (pickerInput) pickerInput.focus();
+    }, 100);
+}
+
+function toggleBatchSelect(id, checked) {
+    if (!id) return;
+    if (checked) selectedBatchIds.add(id);
+    else selectedBatchIds.delete(id);
+    renderBatchCloseModalList();
+}
+
+function toggleSelectAllInBatchModal() {
+    const filteredReady = getBatchModalFilteredRequests();
+    const visibleIds = filteredReady.map(r => r.id);
+    if (visibleIds.length === 0) {
+        showMessage('Tidak ada antrian READY yang tampil untuk dipilih.');
+        return;
+    }
+    const allVisibleSelected = visibleIds.every(id => selectedBatchIds.has(id));
+    if (allVisibleSelected) {
+        visibleIds.forEach(id => selectedBatchIds.delete(id));
+    } else {
+        visibleIds.forEach(id => selectedBatchIds.add(id));
+    }
+    renderBatchCloseModalList();
+}
+
+function toggleSelectAllReady() {
+    toggleSelectAllInBatchModal();
+}
+
+function submitBatchCloseModal() {
+    const activeClosableMap = new Map(
+        getAllActiveRequests()
+            .filter(isRequestClosableReady)
+            .map(r => [r.id, r])
+    );
+    const targetIds = Array.from(selectedBatchIds).filter(id => activeClosableMap.has(id));
+    if (targetIds.length === 0) {
+        return showMessage('Pilih minimal 1 item READY terlebih dahulu!');
+    }
+    const pName = (document.getElementById('batch-picker-name-input')?.value || '').trim().toUpperCase();
+    if (!pName) {
+        const pickerInput = document.getElementById('batch-picker-name-input');
+        if (pickerInput) pickerInput.focus();
+        return showMessage('Nama Pengambil harus diisi!');
+    }
+
+    batchFinishIds = targetIds;
+    const singlePickerInput = document.getElementById('picker-name-input');
+    if (singlePickerInput) singlePickerInput.value = pName;
+    const finishIdInput = document.getElementById('finish-req-id');
+    if (finishIdInput) finishIdInput.value = targetIds.length === 1 ? targetIds[0] : 'BATCH';
+
+    submitFinishWithPicker();
+    closeModal('modal-batch-close');
 }
 
 function renderData() {
@@ -2320,9 +3204,12 @@ function renderData() {
         const matchSearch = req.items.some(i => (i.assy || i.item || '').toLowerCase().includes(searchVal))
             || (req.displayId && req.displayId.toLowerCase().includes(searchVal))
             || (req.gsheetSerial && req.gsheetSerial.toLowerCase().includes(searchVal))
-            || (req.noBox && req.noBox.toLowerCase().includes(searchVal));
+            || (req.noBox && req.noBox.toLowerCase().includes(searchVal))
+            || (req.tglPrintLabel && req.tglPrintLabel.toLowerCase().includes(searchVal));
         return matchLine && matchShift && matchSearch;
     });
+
+    currentVisibleReadyIds = filteredReqs.filter(isRequestClosableReady).map(r => r.id);
 
     if (currentUser.role === 'leader') {
         if (isLeaderGridView) {
@@ -2337,6 +3224,8 @@ function renderData() {
     } else {
         renderSupplyDashboard(filteredReqs);
     }
+
+    updateBatchToolbarUI();
 }
 
 function renderLeaderQueue(requests) {
@@ -2613,7 +3502,15 @@ function saveProgress() {
 }
 
 function openFinishModal(id) {
+    batchFinishIds = [id];
     document.getElementById('finish-req-id').value = id;
+    const titleEl = document.getElementById('picker-modal-title');
+    const subEl = document.getElementById('picker-modal-subtitle');
+    if (titleEl) titleEl.textContent = 'Selesaikan Tiket?';
+    if (subEl) {
+        subEl.textContent = '';
+        subEl.classList.add('hidden');
+    }
     const nameInput = document.getElementById('picker-name-input');
     if (nameInput) nameInput.value = '';
     openModal('modal-picker');
@@ -2622,9 +3519,14 @@ function openFinishModal(id) {
     }, 100);
 }
 
+function openBatchFinishModal() {
+    openBatchCloseModal();
+}
+
 async function archiveToFirestore(finishedReq) {
     const dateStr = new Date(finishedReq.timeFinished).toISOString().split('T')[0];
     saveLocalHistoryRecord(dateStr, finishedReq);
+    recordRequestAssyToHistoryCache(finishedReq);
     if (!dbFs) return;
     const docRef = dbFs.collection('eks_history_buckets').doc(dateStr);
     try {
@@ -2640,64 +3542,143 @@ async function archiveToFirestore(finishedReq) {
     }
 }
 
+async function archiveBatchToFirestore(finishedReqs) {
+    if (!Array.isArray(finishedReqs) || finishedReqs.length === 0) return;
+    if (finishedReqs.length === 1) return archiveToFirestore(finishedReqs[0]);
+
+    const byDate = {};
+    finishedReqs.forEach(finishedReq => {
+        const dateStr = new Date(finishedReq.timeFinished).toISOString().split('T')[0];
+        saveLocalHistoryRecord(dateStr, finishedReq);
+        recordRequestAssyToHistoryCache(finishedReq);
+        if (!byDate[dateStr]) byDate[dateStr] = [];
+        byDate[dateStr].push(finishedReq);
+    });
+
+    if (!dbFs) return;
+    const fb = (typeof window !== 'undefined' && window.firebase) ? window.firebase : (typeof firebase !== 'undefined' ? firebase : null);
+    for (const dateStr of Object.keys(byDate)) {
+        const docRef = dbFs.collection('eks_history_buckets').doc(dateStr);
+        const batchDocs = byDate[dateStr];
+        try {
+            const doc = await docRef.get();
+            if (doc.exists && fb && fb.firestore && fb.firestore.FieldValue) {
+                await docRef.update({ transactions: fb.firestore.FieldValue.arrayUnion(...batchDocs) });
+            } else {
+                await docRef.set({ date: dateStr, transactions: batchDocs });
+            }
+        } catch (e) {
+            console.error('Error batch archiving to Firestore:', e);
+        }
+    }
+}
+
 function submitFinishWithPicker() {
-    const id = document.getElementById('finish-req-id').value;
+    const fallbackId = document.getElementById('finish-req-id').value;
+    const targetIds = batchFinishIds.length > 0
+        ? [...batchFinishIds]
+        : (fallbackId && fallbackId !== 'BATCH' ? [fallbackId] : []);
     const pName = document.getElementById('picker-name-input').value.trim().toUpperCase();
     if (!pName) return showMessage('Nama Pengambil harus diisi!');
+    if (targetIds.length === 0) {
+        closeModal('modal-picker');
+        return;
+    }
 
-    // Cek jika tiket berasal dari Google Sheets (Validasi Serial WO ID di Firebase agar tidak muncul lagi)
-    const gsReq = gsheetReadyRequests.find(r => r.id === id);
-    if (gsReq) {
-        const finishedAt = Date.now();
-        const finishedReq = {
-            ...gsReq,
-            status: STATUS_FINISHED,
-            timeFinished: finishedAt,
-            pickedBy: pName,
-            finishedBy: gsReq.supplierBy || '-'
-        };
+    const finishedAtBase = Date.now();
+    const gsReqMap = new Map(gsheetReadyRequests.map(r => [r.id, r]));
+    const manualReqMap = new Map((db.requests || []).map((r, i) => [r.id, { req: r, idx: i }]));
 
-        const completionPayload = {
-            serialWO: gsReq.gsheetSerial,
-            assy: gsReq.items[0].assy,
-            noBox: gsReq.noBox || '-',
-            pickedBy: pName,
-            supplierBy: gsReq.supplierBy || '-',
-            timeFinished: finishedAt
-        };
-        completedGsheetSerials[gsReq.gsheetSafeKey] = completionPayload;
+    const rtdbUpdates = {};
+    const finishedReqsToArchive = [];
+    const manualIdsToRemove = new Set();
+    let closedGsCount = 0;
+    let closedManualCount = 0;
+    let skippedStaleGsCount = 0;
+
+    targetIds.forEach((id, seq) => {
+        const finishedAt = finishedAtBase + seq;
+        const gsReq = gsReqMap.get(id);
+        if (gsReq) {
+            const finishedReq = {
+                ...gsReq,
+                status: STATUS_FINISHED,
+                timeFinished: finishedAt,
+                pickedBy: pName,
+                finishedBy: gsReq.supplierBy || '-'
+            };
+            const completionPayload = {
+                serialWO: gsReq.gsheetSerial,
+                assy: gsReq.items[0].assy,
+                noBox: gsReq.noBox || '-',
+                pickedBy: pName,
+                supplierBy: gsReq.supplierBy || '-',
+                timeFinished: finishedAt
+            };
+            completedGsheetSerials[gsReq.gsheetSafeKey] = completionPayload;
+            rtdbUpdates[gsReq.gsheetSafeKey] = completionPayload;
+            finishedReqsToArchive.push(finishedReq);
+            selectedBatchIds.delete(id);
+            closedGsCount++;
+            return;
+        }
+
+        if (id && id.startsWith('GS-')) {
+            selectedBatchIds.delete(id);
+            skippedStaleGsCount++;
+            return;
+        }
+
+        const manualEntry = manualReqMap.get(id);
+        if (manualEntry && manualEntry.req) {
+            const finishedReq = {
+                ...manualEntry.req,
+                status: STATUS_FINISHED,
+                timeFinished: finishedAt,
+                pickedBy: pName,
+                finishedBy: manualEntry.req.supplierBy || '-'
+            };
+            manualIdsToRemove.add(id);
+            finishedReqsToArchive.push(finishedReq);
+            selectedBatchIds.delete(id);
+            closedManualCount++;
+        }
+    });
+
+    if (closedGsCount > 0) {
         saveLocalCompletedGsheet();
         if (completedGsheetRef) {
             try {
-                completedGsheetRef.child(gsReq.gsheetSafeKey).set(completionPayload);
+                completedGsheetRef.update(rtdbUpdates);
             } catch (e) {
                 console.warn('Gagal menyimpan validasi GSheet ke Firebase:', e);
             }
         }
         rebuildGsheetRequests();
-        renderData();
-
-        archiveToFirestore(finishedReq);
-        closeModal('modal-picker');
-        showMessage(`Tiket GSheet (${gsReq.gsheetSerial}) selesai & divalidasi!`);
-        return;
     }
 
-    const idx = db.requests.findIndex(r => r.id === id);
-    if (idx > -1) {
-        db.requests[idx].status = STATUS_FINISHED;
-        db.requests[idx].timeFinished = Date.now();
-        db.requests[idx].pickedBy = pName;
-        db.requests[idx].finishedBy = db.requests[idx].supplierBy || '-';
-
-        const finishedReq = { ...db.requests[idx] };
-        archiveToFirestore(finishedReq);
-
-        db.requests.splice(idx, 1);
+    if (closedManualCount > 0) {
+        db.requests = (db.requests || []).filter(r => !manualIdsToRemove.has(r.id));
         saveDB();
+    }
 
-        closeModal('modal-picker');
-        showMessage('Tiket selesai & diarsipkan ke Database Utama.');
+    batchFinishIds = [];
+    renderData();
+    if (finishedReqsToArchive.length > 0) {
+        archiveBatchToFirestore(finishedReqsToArchive);
+    }
+    closeModal('modal-picker');
+
+    const totalClosed = closedGsCount + closedManualCount;
+    if (totalClosed === 0 && skippedStaleGsCount > 0) {
+        showMessage('Item tersebut sudah berstatus CLOSED di Google Sheets (tidak masuk history).');
+    } else if (totalClosed === 1 && finishedReqsToArchive[0]) {
+        const only = finishedReqsToArchive[0];
+        showMessage(only.isFromGsheet
+            ? `Tiket GSheet (${only.gsheetSerial}) selesai & masuk ke History!`
+            : 'Tiket selesai & diarsipkan ke Database Utama.');
+    } else if (totalClosed > 1) {
+        showMessage(`Batch Selesai: ${totalClosed} tiket diselesaikan (${pName}) & masuk ke History!`);
     }
 }
 
@@ -2864,7 +3845,214 @@ function filterAndRenderHistory() {
         h.innerHTML = `<div class="text-center text-gray-400 text-xs font-bold py-10">Belum ada history</div>`;
         return;
     }
-    h.innerHTML = limitedReqs.map(req => `<div onclick="showDetailModal('${req.id}')" class="cursor-pointer bg-white border border-gray-100 rounded-lg shadow-sm hover:shadow mb-2"><div class="bg-gray-50 flex justify-between items-center px-2.5 py-1.5 border-b"><div class="flex items-center gap-1.5 overflow-hidden flex-1 pr-2"><span class="font-display font-black text-[13px] ${req.isFromGsheet ? 'text-emerald-700' : 'text-brand-blue'} shrink-0">${req.displayId || '#' + req.queueNum}</span>${req.isFromGsheet ? '<span class="text-[7px] font-black uppercase px-1 rounded bg-emerald-600 text-white shrink-0">GSHEET</span>' : ''}<span class="text-[8px] font-bold uppercase px-1.5 rounded border shrink-0 ${req.type === 'ALL' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}">${req.type}</span><span class="text-[10px] font-bold text-gray-700 truncate">${req.items.map(i => i.assy).join(', ')}</span></div><span class="text-[8px] text-green-600 font-bold uppercase shrink-0"><i class="fas fa-check"></i> Selesai</span></div><div class="px-2.5 py-1.5 flex justify-between items-center text-[9px] text-gray-400"><span class="font-bold truncate pr-2"><i class="fas fa-hand-holding"></i> ${req.pickedBy || req.requestedBy}</span><span class="font-mono bg-gray-100 px-1.5 py-0.5 rounded text-gray-500 shrink-0">${new Date(req.timeFinished || req.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} | ${new Date(req.timeFinished || req.timestamp).toLocaleDateString()}</span></div></div>`).join('');
+    h.innerHTML = limitedReqs.map(req => {
+        const safeId = String(req.id || '').replace(/'/g, "\\'");
+        const finishedTs = Number(req.timeFinished || req.timestamp || 0);
+        return `<div onclick="showDetailModal('${safeId}')" oncontextmenu="handleHistoryRightClick(event, '${safeId}', ${finishedTs})" title="Klik kiri untuk detail • Klik kanan untuk Undo Closed" class="cursor-pointer bg-white border border-gray-100 rounded-lg shadow-sm hover:shadow mb-2"><div class="bg-gray-50 flex justify-between items-center px-2.5 py-1.5 border-b"><div class="flex items-center gap-1.5 overflow-hidden flex-1 pr-2"><span class="font-display font-black text-[13px] ${req.isFromGsheet ? 'text-emerald-700' : 'text-brand-blue'} shrink-0">${req.displayId || '#' + req.queueNum}</span>${req.isFromGsheet ? '<span class="text-[7px] font-black uppercase px-1 rounded bg-emerald-600 text-white shrink-0">GSHEET</span>' : ''}<span class="text-[8px] font-bold uppercase px-1.5 rounded border shrink-0 ${req.type === 'ALL' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}">${req.type}</span><span class="text-[10px] font-bold text-gray-700 truncate">${req.items.map(i => i.assy).join(', ')}</span></div><span class="text-[8px] text-green-600 font-bold uppercase shrink-0"><i class="fas fa-check"></i> Selesai</span></div><div class="px-2.5 py-1.5 flex justify-between items-center text-[9px] text-gray-400"><span class="font-bold truncate pr-2"><i class="fas fa-hand-holding"></i> ${req.pickedBy || req.requestedBy}</span><span class="font-mono bg-gray-100 px-1.5 py-0.5 rounded text-gray-500 shrink-0">${new Date(req.timeFinished || req.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} | ${new Date(req.timeFinished || req.timestamp).toLocaleDateString()}</span></div></div>`;
+    }).join('');
+}
+
+let historyContextTarget = null;
+
+function hideHistoryContextMenu() {
+    const menu = document.getElementById('history-context-menu');
+    if (menu) menu.classList.add('hidden');
+    historyContextTarget = null;
+}
+
+function handleHistoryRightClick(e, id, timeFinished) {
+    if (e) {
+        e.preventDefault();
+        e.stopPropagation();
+    }
+    const targetReq = findHistoryRecord(id, timeFinished);
+    if (!targetReq) return;
+
+    historyContextTarget = {
+        id: targetReq.id,
+        timeFinished: Number(targetReq.timeFinished || targetReq.timestamp || 0)
+    };
+
+    const menu = document.getElementById('history-context-menu');
+    if (!menu) return;
+    menu.classList.remove('hidden');
+
+    const menuWidth = menu.offsetWidth || 180;
+    const menuHeight = menu.offsetHeight || 42;
+    const vw = (typeof window !== 'undefined' && window.innerWidth) ? window.innerWidth : 1280;
+    const vh = (typeof window !== 'undefined' && window.innerHeight) ? window.innerHeight : 720;
+    const clientX = (e && typeof e.clientX === 'number') ? e.clientX : 100;
+    const clientY = (e && typeof e.clientY === 'number') ? e.clientY : 100;
+    const left = Math.max(8, Math.min(clientX, vw - menuWidth - 8));
+    const top = Math.max(8, Math.min(clientY, vh - menuHeight - 8));
+
+    menu.style.left = `${left}px`;
+    menu.style.top = `${top}px`;
+}
+
+function findHistoryRecord(id, timeFinished) {
+    const targetTs = Number(timeFinished || 0);
+    let found = loadedHistoryData.find(r => r.id === id && (!targetTs || Number(r.timeFinished || r.timestamp || 0) === targetTs));
+    if (!found) found = loadedHistoryData.find(r => r.id === id);
+    return found || null;
+}
+
+function isSameHistoryRecord(r, targetReq) {
+    if (!r || !targetReq || r.id !== targetReq.id) return false;
+    const rTs = Number(r.timeFinished || r.timestamp || 0);
+    const tTs = Number(targetReq.timeFinished || targetReq.timestamp || 0);
+    return !tTs || !rTs || rTs === tTs;
+}
+
+function removeLocalHistoryRecord(targetReq) {
+    loadedHistoryData = loadedHistoryData.filter(r => !isSameHistoryRecord(r, targetReq));
+
+    const dateStr = new Date(targetReq.timeFinished || targetReq.timestamp || Date.now()).toISOString().split('T')[0];
+    if (Array.isArray(cachedHistoryBuckets[dateStr])) {
+        cachedHistoryBuckets[dateStr] = cachedHistoryBuckets[dateStr].filter(r => !isSameHistoryRecord(r, targetReq));
+    }
+
+    try {
+        const all = JSON.parse(localStorage.getItem(LOCAL_HISTORY_STORAGE_KEY) || '{}') || {};
+        let changed = false;
+        Object.keys(all).forEach(k => {
+            if (!Array.isArray(all[k])) return;
+            const beforeLen = all[k].length;
+            all[k] = all[k].filter(r => !isSameHistoryRecord(r, targetReq));
+            if (all[k].length !== beforeLen) changed = true;
+        });
+        if (changed) {
+            localStorage.setItem(LOCAL_HISTORY_STORAGE_KEY, JSON.stringify(all));
+        }
+    } catch (e) {}
+}
+
+async function removeHistoryFromFirestore(targetReq) {
+    if (!dbFs || !targetReq) return;
+    const dateStr = new Date(targetReq.timeFinished || targetReq.timestamp || Date.now()).toISOString().split('T')[0];
+    const docRef = dbFs.collection('eks_history_buckets').doc(dateStr);
+    try {
+        const doc = await docRef.get();
+        if (!doc.exists) return;
+        const currentTx = Array.isArray(doc.data().transactions) ? doc.data().transactions : [];
+        let removedOne = false;
+        const nextTx = currentTx.filter(r => {
+            if (!removedOne && isSameHistoryRecord(r, targetReq)) {
+                removedOne = true;
+                return false;
+            }
+            return true;
+        });
+        if (removedOne) {
+            await docRef.update({ transactions: nextTx });
+            if (Array.isArray(cachedHistoryBuckets[dateStr])) {
+                cachedHistoryBuckets[dateStr] = nextTx;
+            }
+        }
+    } catch (e) {
+        console.error('Error removing history record from Firestore:', e);
+    }
+}
+
+function confirmUndoClosedFromHistory() {
+    if (!historyContextTarget) return;
+    const { id, timeFinished } = historyContextTarget;
+    hideHistoryContextMenu();
+    undoClosedFromHistory(id, timeFinished);
+}
+
+async function undoClosedFromHistory(id, timeFinished) {
+    const targetReq = findHistoryRecord(id, timeFinished);
+    if (!targetReq) {
+        showMessage('Data history tidak ditemukan.');
+        return;
+    }
+
+    const isGsheet = !!(targetReq.isFromGsheet || (targetReq.id && String(targetReq.id).startsWith('GS-')) || targetReq.gsheetSafeKey);
+
+    if (isGsheet) {
+        const keysToRemove = new Set();
+        const primaryKey = targetReq.gsheetSafeKey || String(targetReq.id || '').replace(/^GS-/, '');
+        if (primaryKey) keysToRemove.add(primaryKey);
+        if (targetReq.gsheetLegacySafeKey) keysToRemove.add(targetReq.gsheetLegacySafeKey);
+
+        const targetAssy = (targetReq.items && targetReq.items[0] && targetReq.items[0].assy) ? targetReq.items[0].assy : '';
+        Object.keys(completedGsheetSerials || {}).forEach(k => {
+            const entry = completedGsheetSerials[k];
+            if (keysToRemove.has(k)) return;
+            if (entry && targetReq.gsheetSerial && entry.serialWO === targetReq.gsheetSerial && (!entry.assy || !targetAssy || entry.assy === targetAssy)) {
+                keysToRemove.add(k);
+            }
+        });
+
+        keysToRemove.forEach(k => {
+            delete completedGsheetSerials[k];
+        });
+        saveLocalCompletedGsheet();
+
+        if (completedGsheetRef) {
+            keysToRemove.forEach(k => {
+                try {
+                    completedGsheetRef.child(k).remove();
+                } catch (e) {
+                    console.warn('Gagal menghapus status selesai GSheet di Firebase:', e);
+                }
+            });
+        }
+
+        rebuildGsheetRequests();
+    } else {
+        const restoredReq = { ...targetReq };
+        restoredReq.status = STATUS_READY;
+        restoredReq.step = restoredReq.step || 4;
+        restoredReq.timeReady = restoredReq.timeReady || restoredReq.timeFinished || Date.now();
+        delete restoredReq.timeFinished;
+        delete restoredReq.pickedBy;
+        delete restoredReq.finishedBy;
+
+        if (!Array.isArray(db.requests)) db.requests = [];
+        const existingIdx = db.requests.findIndex(r => r.id === restoredReq.id);
+        if (existingIdx > -1) {
+            db.requests[existingIdx] = restoredReq;
+        } else {
+            db.requests.push(restoredReq);
+        }
+        saveDB();
+    }
+
+    removeLocalHistoryRecord(targetReq);
+    filterAndRenderHistory();
+
+    const detailModal = document.getElementById('modal-detail');
+    if (detailModal && !detailModal.classList.contains('hidden') && currentDetailReqId === targetReq.id) {
+        closeModal('modal-detail');
+    }
+
+    if (isHistoryOpen) {
+        toggleHistory();
+    }
+
+    renderData();
+    await removeHistoryFromFirestore(targetReq);
+
+    if (isGsheet && !gsheetReadyRequests.some(r => r.id === targetReq.id)) {
+        syncGsheetReadyItems(false);
+    }
+
+    const label = targetReq.displayId || (targetReq.items && targetReq.items[0] ? targetReq.items[0].assy : targetReq.id);
+    showMessage(`Undo Closed berhasil! ${label} dikembalikan ke Active Queue.`);
+}
+
+if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+    document.addEventListener('click', (e) => {
+        const menu = document.getElementById('history-context-menu');
+        if (!menu || menu.classList.contains('hidden')) return;
+        if (e && e.target && typeof e.target.closest === 'function' && e.target.closest('#history-context-menu')) return;
+        hideHistoryContextMenu();
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e && e.key === 'Escape') hideHistoryContextMenu();
+    });
 }
 
 function toggleChatPanel() {
@@ -2954,6 +4142,7 @@ function showDetailModal(id) {
     if (!req) req = gsheetReadyRequests.find(r => r.id === id);
     if (!req) req = loadedHistoryData.find(r => r.id === id);
     if (!req) return;
+    currentDetailReqId = req.id;
 
     if (req.isFromGsheet && req.status !== STATUS_FINISHED && gsheetMetaMap[req.gsheetSafeKey] && gsheetMetaMap[req.gsheetSafeKey].messages) {
         const msgObj = gsheetMetaMap[req.gsheetSafeKey].messages;
@@ -3112,10 +4301,10 @@ function showDetailModal(id) {
             </div>
             ${req.isFromGsheet ? `
             <div class="mb-5 bg-emerald-50 border border-emerald-200 p-3.5 rounded-xl shadow-sm grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
-                <div><div class="text-[9px] font-bold text-emerald-600 uppercase">Serial WO ID (B)</div><div class="font-mono font-black text-emerald-900 break-all">${req.gsheetSerial}</div></div>
-                <div><div class="text-[9px] font-bold text-emerald-600 uppercase">No BOX (AI)</div><div class="font-black text-emerald-900">${req.noBox || '-'}</div></div>
-                <div><div class="text-[9px] font-bold text-emerald-600 uppercase">Tgl Print (AC)</div><div class="font-black text-emerald-900">${req.tglPrintLabel || '-'}</div></div>
-                <div><div class="text-[9px] font-bold text-emerald-600 uppercase">PIC Warehouse (AF)</div><div class="font-black text-emerald-900">${req.supplierBy || '-'}</div></div>
+                <div><div class="text-[9px] font-bold text-emerald-600 uppercase">Serial WO ID (${(req.colLetters && req.colLetters.serialWO) || 'B'})</div><div class="font-mono font-black text-emerald-900 break-all">${req.gsheetSerial}</div></div>
+                <div><div class="text-[9px] font-bold text-emerald-600 uppercase">No BOX (${(req.colLetters && req.colLetters.noBox) || 'AJ'})</div><div class="font-black text-emerald-900">${req.noBox || '-'}</div></div>
+                <div><div class="text-[9px] font-bold text-emerald-600 uppercase">Tgl Print (${(req.colLetters && req.colLetters.tglPrint) || 'AC'})</div><div class="font-black text-emerald-900">${req.tglPrintLabel || '-'}</div></div>
+                <div><div class="text-[9px] font-bold text-emerald-600 uppercase">PIC Warehouse (${(req.colLetters && req.colLetters.pic) || 'AG'})</div><div class="font-black text-emerald-900">${req.supplierBy || '-'}</div></div>
             </div>
             ` : ''}
             <div class="flex gap-4 mb-6 text-xs text-gray-500 font-bold bg-gray-50 p-3.5 rounded-xl border shadow-inner"><div class="flex-1"><i class="fas fa-user-circle text-gray-400"></i> ${req.requestedBy}</div><div class="flex-1"><i class="fas fa-tag text-gray-400"></i> ${req.type}</div>${req.urgent ? `<div class="text-red-500 animate-pulse"><i class="fas fa-fire"></i> URGENT</div>` : ''}</div>${req.status !== STATUS_WAITING && req.status !== STATUS_FINISHED ? `<div class="mb-6 bg-white p-4 rounded-xl border shadow-sm"><div class="flex gap-1.5"><div class="h-2.5 flex-1 rounded-l-full ${req.step >= 1 ? 'bg-brand-teal' : 'bg-gray-100'}"></div><div class="h-2.5 flex-1 ${req.step >= 2 ? 'bg-brand-teal' : 'bg-gray-100'}"></div><div class="h-2.5 flex-1 ${req.step >= 3 ? 'bg-brand-teal' : 'bg-gray-100'}"></div><div class="h-2.5 flex-1 rounded-r-full ${req.step >= 4 ? 'bg-brand-teal' : 'bg-gray-100'}"></div></div><div class="flex justify-between text-[9px] font-bold text-gray-400 mt-2 uppercase"><span>Accept</span><span>Print</span><span>Cut</span><span>Done</span></div></div>` : ''}${histHtml}<div class="text-[11px] font-black text-brand-blue uppercase mb-2 pl-1">Data Part Request</div>${itemsHtml}</div></div>
